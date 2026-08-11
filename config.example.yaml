@@ -1,0 +1,53 @@
+# BlackBook MCP configuration.
+# Place at ~/.blackbook/config.yaml, or point BLACKBOOK_CONFIG at it.
+# Environment variables (BLACKBOOK_*) override these values.
+#
+# NOTE: quote source ids that look like hex (e.g. "0xdf") — YAML 1.1 otherwise
+# parses `0xdf` as the integer 223.
+
+home: ~/.blackbook
+
+database:
+  # Leave empty to use <home>/data.db
+  path: ""
+
+sources:
+  - id: hacktricks
+    name: HackTricks
+    enabled: true
+    type: git
+    authority: trusted
+    url: https://github.com/HackTricks-wiki/hacktricks.git
+    # max_files: 50            # optionally bound ingestion size
+    # max_document_bytes: 20000000
+
+  - id: "0xdf"
+    name: 0xdf
+    enabled: true
+    type: website
+    authority: trusted
+    url: https://0xdf.gitlab.io/
+    # max_files: 25
+
+  - id: local_pdfs
+    name: Local PDFs
+    enabled: true
+    type: filesystem
+    authority: user            # user-supplied; NOT assumed authoritative
+    directory: ~/knowledge/pdfs
+    include_glob: "**/*.pdf"
+
+embeddings:
+  enabled: false               # Phase 3: semantic/vector search
+  model: sentence-transformers/all-MiniLM-L6-v2
+  device: cpu
+
+retrieval:
+  default_limit: 8
+  max_limit: 50
+  max_context_chunks: 12
+  per_document_cap: 2          # source diversity: max chunks per document
+  snippet_chars: 400
+
+logging:
+  level: INFO

@@ -1,0 +1,209 @@
+"""BlackBook configuration.
+
+Configuration is loaded from three layers, in increasing priority:
+
+1. Defaults defined in :class:`Settings`.
+2. A YAML config file (``~/.blackbook/config.yaml`` by default).
+3. Environment variables prefixed with ``BLACKBOOK_``.
+
+Paths support ``~`` expansion. The settings object is the single source of
+truth for the source registry (which sources exist, whether they are enabled,
+and how they are fetched) and for retrieval behaviour.
+"""
+
+from __future__ import annotations
+
+import os
+from pathlib import Path
+from typing import Literal
+
+from pydantic import BaseModel, Field, field_validator
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+from ruamel.yaml import YAML
+
+
+def expand_path(p: str | Path) -> Path:
+    """Expand ``~`` and environment variables in a path, without requiring it
+    to exist. Returned path is absolute (resolved as far as possible)."""
+    s = os.path.expandvars(str(p))
+    s = os.path.expanduser(s)
+    return Path(s)
+
+
+class SourceConfig(BaseModel):
+    """Configuration for a single knowledge source."""
+
+    id: str
+    name: str
+    enabled: bool = True
+    # "git" (clone + parse), "website" (crawl/scrape), "filesystem" (local files)
+    type: Literal["git", "website", "filesystem"] = "filesystem"
+    # Source authority affects ranking weight and how results are presented.
+    authority: Literal["official", "trusted", "user", "unknown"] = "unknown"
+    # Optional category tags propagated to every chunk from this source.
+    categories: list[str] = Field(default_factory=list)
+
+    # git / website sources
+    url: str | None = None
+    ref: str | None = None  # git branch/tag/commit
+
+    # filesystem sources
+    directory: str | None = None
+    include_glob: str = "**/*.pdf"  # for filesystem sources
+
+    # Fetch limits (security / cost control)
+    max_files: int | None = None
+    max_document_bytes: int = 20 * 1024 * 1024  # 20 MB per document cap
+
+    @field_validator("id", "name", mode="before")
+    @classmethod
+    def _coerce_str(cls, v):
+        # Safety net: YAML 1.1 can parse an id like ``0xdf`` as an integer
+        # (hex). Coerce to string rather than crash. Config files should quote
+        # such ids (``id: "0xdf"``) to preserve the intended spelling.
+        return str(v) if v is not None else v
+
+
+class EmbeddingsConfig(BaseModel):
+    enabled: bool = False
+    model: str = "sentence-transformers/all-MiniLM-L6-v2"
+    device: str = "cpu"
+    batch_size: int = 32
+
+
+class RetrievalConfig(BaseModel):
+    default_limit: int = 8
+    max_limit: int = 50
+    max_context_chunks: int = 12
+    # Source-diversity: at most this many chunks may come from one document.
+    per_document_cap: int = 2
+    snippet_chars: int = 400
+
+
+class DatabaseConfig(BaseModel):
+    # When empty, the db path is derived from ``Settings.home`` as
+    # ``<home>/data.db``. Set this explicitly to override.
+    path: str = ""
+
+
+class LoggingConfig(BaseModel):
+    level: str = "INFO"
+
+
+def _default_sources() -> list[SourceConfig]:
+    return [
+        SourceConfig(
+            id="hacktricks",
+            name="HackTricks",
+            enabled=True,
+            type="git",
+            authority="trusted",
+            url="https://github.com/HackTricks-wiki/hacktricks.git",
+            ref="master",
+        ),
+        SourceConfig(
+            id="0xdf",
+            name="0xdf",
+            enabled=True,
+            type="website",
+            authority="trusted",
+            url="https://0xdf.gitlab.io/",
+        ),
+        SourceConfig(
+            id="local_pdfs",
+            name="Local PDFs",
+            enabled=True,
+            type="filesystem",
+            authority="user",
+            directory="~/knowledge/pdfs",
+        ),
+    ]
+
+
+class Settings(BaseSettings):
+    """Top-level application settings."""
+
+    model_config = SettingsConfigDict(
+        env_prefix="BLACKBOOK_",
+        env_nested_delimiter="__",
+        extra="ignore",
+    )
+
+    home: Path = Field(default_factory=lambda: expand_path("~/.blackbook"))
+    database: DatabaseConfig = Field(default_factory=DatabaseConfig)
+    embeddings: EmbeddingsConfig = Field(default_factory=EmbeddingsConfig)
+    retrieval: RetrievalConfig = Field(default_factory=RetrievalConfig)
+    logging: LoggingConfig = Field(default_factory=LoggingConfig)
+    sources: list[SourceConfig] = Field(default_factory=_default_sources)
+
+    # ---- derived helpers -------------------------------------------------
+
+    @property
+    def db_path(self) -> Path:
+        if self.database.path:
+            return expand_path(self.database.path)
+        return self.home / "data.db"
+
+    @property
+    def raw_dir(self) -> Path:
+        """Directory where raw source checkouts/downloads live."""
+        return self.home / "raw"
+
+    def get_source(self, source_id: str) -> SourceConfig | None:
+        for s in self.sources:
+            if s.id == source_id:
+                return s
+        return None
+
+    def enabled_sources(self) -> list[SourceConfig]:
+        return [s for s in self.sources if s.enabled]
+
+    def source_ids(self, requested: list[str] | None) -> list[str]:
+        """Resolve a requested source filter to concrete source IDs.
+
+        ``None`` or ``["all"]`` means every enabled source. Unknown IDs are
+        silently dropped so a typo never widens the query beyond intent.
+        """
+        enabled = {s.id for s in self.enabled_sources()}
+        if not requested or requested == ["all"]:
+            return sorted(enabled)
+        return [sid for sid in requested if sid in enabled]
+
+
+def load_config(config_path: str | Path | None = None) -> Settings:
+    """Load settings, merging a YAML config file if present.
+
+    Environment variables (``BLACKBOOK_*``) always win over the YAML file.
+    """
+    # Resolve which config file to read.
+    env_cfg = os.environ.get("BLACKBOOK_CONFIG")
+    if config_path is not None:
+        cfg_path = expand_path(config_path)
+    elif env_cfg:
+        cfg_path = expand_path(env_cfg)
+    else:
+        cfg_path = expand_path("~/.blackbook/config.yaml")
+
+    data: dict = {}
+    if cfg_path.is_file():
+        yaml = YAML(typ="safe", pure=True)
+        loaded = yaml.load(cfg_path.read_text())
+        if isinstance(loaded, dict):
+            data = loaded
+
+    # pydantic-settings reads env vars on top of the init kwargs we pass.
+    settings = Settings(**data)
+    # Ensure ~ expansion for home and any filesystem source directories.
+    settings.home = expand_path(settings.home)
+    for src in settings.sources:
+        if src.directory:
+            src.directory = str(expand_path(src.directory))
+    return settings
+
+
+def ensure_dirs(settings: Settings) -> None:
+    """Create the directories BlackBook needs at runtime."""
+    settings.home.mkdir(parents=True, exist_ok=True)
+    settings.raw_dir.mkdir(parents=True, exist_ok=True)
+    settings.db_path.parent.mkdir(parents=True, exist_ok=True)

@@ -1,0 +1,1 @@
+"""blackbook.mcp subpackage."""

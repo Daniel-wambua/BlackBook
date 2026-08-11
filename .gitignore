@@ -1,0 +1,42 @@
+# Byte-compiled / build
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# Virtual envs
+.venv/
+venv/
+env/
+
+# Tooling
+.pytest_cache/
+.coverage
+htmlcov/
+.ruff_cache/
+.mypy_cache/
+
+# Logs / transient build artifacts
+*.log
+
+# Env / secrets
+.env
+.env.local
+
+# BlackBook runtime data (databases, caches, raw source checkouts)
+.blackbook/
+data/
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
+*.swp
