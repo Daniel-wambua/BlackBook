@@ -52,6 +52,7 @@ semantic = [
 ]
 # Development / test extras.
 dev = [
+    "numpy>=1.26,<3.0",
     "pytest>=8.0,<9.0",
     "pytest-cov>=4.0,<6.0",
 ]

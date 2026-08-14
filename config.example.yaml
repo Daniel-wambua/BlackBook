@@ -22,7 +22,7 @@ sources:
     # max_document_bytes: 20000000
 
   - id: "0xdf"
-    name: 0xdf
+    name: "0xdf"
     enabled: true
     type: website
     authority: trusted

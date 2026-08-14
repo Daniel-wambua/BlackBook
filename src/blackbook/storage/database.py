@@ -51,8 +51,17 @@ class Database:
         self.conn = sqlite3.connect(self.path, check_same_thread=False)
         self.conn.row_factory = sqlite3.Row
         self.conn.execute("PRAGMA foreign_keys = ON")
+        # Allow a short wait when another process is finishing a write. This is
+        # important because the CLI ingestion process and stdio MCP server may
+        # legitimately share the same SQLite database.
+        self.conn.execute("PRAGMA busy_timeout = 10000")
         self.conn.execute("PRAGMA journal_mode = WAL")
         migrations.migrate(self.conn)
+        # migrations.migrate writes schema metadata but intentionally does not
+        # own the connection lifecycle. Commit it here so a long-lived MCP
+        # server cannot hold the migration transaction open and block a later
+        # CLI invocation such as `blackbook ingest`.
+        self.conn.commit()
 
     # -- lifecycle --------------------------------------------------------
 
