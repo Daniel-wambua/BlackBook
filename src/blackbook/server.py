@@ -17,11 +17,17 @@ from mcp.server.fastmcp import FastMCP
 from blackbook.config import ensure_dirs, load_config
 from blackbook.mcp.schemas import (
     CaseSearchInput,
+    CaseSearchOutput,
     ContextInput,
+    ContextOutput,
     GetSourceInput,
     ResearchInput,
+    ResearchOutput,
     SearchInput,
+    SearchOutput,
+    SourceOutput,
     TechniqueInput,
+    TechniqueOutput,
 )
 from blackbook.mcp.tools import KnowledgeTools
 from blackbook.storage.database import Database
@@ -175,7 +181,7 @@ def build_server(settings=None, db: Database | None = None) -> FastMCP:
         mode: str = "hybrid",
         limit: int = 8,
         detail: str = "standard",
-    ) -> dict:
+    ) -> SearchOutput:
         inp = SearchInput(
             query=query,
             sources=sources,
@@ -186,7 +192,7 @@ def build_server(settings=None, db: Database | None = None) -> FastMCP:
             limit=limit,
             detail=detail,  # type: ignore[arg-type]
         )
-        return tools.knowledge_search(inp).model_dump()
+        return tools.knowledge_search(inp)
 
     @mcp.tool(
         name="knowledge_source",
@@ -205,7 +211,7 @@ def build_server(settings=None, db: Database | None = None) -> FastMCP:
         title_contains: str | None = None,
         section: str | None = None,
         max_excerpts: int = 5,
-    ) -> dict:
+    ) -> SourceOutput:
         inp = GetSourceInput(
             chunk_id=chunk_id,
             doc_id=doc_id,
@@ -215,7 +221,7 @@ def build_server(settings=None, db: Database | None = None) -> FastMCP:
             section=section,
             max_excerpts=max_excerpts,
         )
-        return tools.knowledge_source(inp).model_dump()
+        return tools.knowledge_source(inp)
 
     @mcp.tool(
         name="knowledge_technique",
@@ -232,9 +238,9 @@ def build_server(settings=None, db: Database | None = None) -> FastMCP:
         technique: str,
         sources: list[str] | None = None,
         limit: int = 6,
-    ) -> dict:
+    ) -> TechniqueOutput:
         inp = TechniqueInput(technique=technique, sources=sources, limit=limit)
-        return tools.knowledge_technique(inp).model_dump()
+        return tools.knowledge_technique(inp)
 
     @mcp.tool(
         name="knowledge_case_search",
@@ -252,7 +258,7 @@ def build_server(settings=None, db: Database | None = None) -> FastMCP:
         platform: str | None = None,
         techniques: list[str] | None = None,
         limit: int = 6,
-    ) -> dict:
+    ) -> CaseSearchOutput:
         inp = CaseSearchInput(
             query=query,
             sources=sources,
@@ -260,7 +266,7 @@ def build_server(settings=None, db: Database | None = None) -> FastMCP:
             techniques=techniques,
             limit=limit,
         )
-        return tools.knowledge_case_search(inp).model_dump()
+        return tools.knowledge_case_search(inp)
 
     @mcp.tool(
         name="knowledge_research",
@@ -281,7 +287,7 @@ def build_server(settings=None, db: Database | None = None) -> FastMCP:
         techniques: list[str] | None = None,
         limit: int = 6,
         include_cases: bool = True,
-    ) -> dict:
+    ) -> ResearchOutput:
         inp = ResearchInput(
             observation=observation,
             sources=sources,
@@ -290,7 +296,7 @@ def build_server(settings=None, db: Database | None = None) -> FastMCP:
             limit=limit,
             include_cases=include_cases,
         )
-        return tools.knowledge_research(inp).model_dump()
+        return tools.knowledge_research(inp)
 
     @mcp.tool(
         name="knowledge_context",
@@ -314,7 +320,7 @@ def build_server(settings=None, db: Database | None = None) -> FastMCP:
         obs_id: int | None = None,
         status: str | None = None,
         meta: dict | None = None,
-    ) -> dict:
+    ) -> ContextOutput:
         inp = ContextInput(
             action=action,  # type: ignore[arg-type]
             case=case,
@@ -326,7 +332,7 @@ def build_server(settings=None, db: Database | None = None) -> FastMCP:
             status=status,  # type: ignore[arg-type]
             meta=meta,
         )
-        return tools.knowledge_context(inp).model_dump()
+        return tools.knowledge_context(inp)
 
     return mcp
 
