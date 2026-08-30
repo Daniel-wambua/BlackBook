@@ -689,19 +689,53 @@ def eval_cmd(
 def serve(
     verbose: bool = typer.Option(False, "--verbose", "-v"),
     banner: bool = typer.Option(True, "--banner/--no-banner", help="Show the startup banner."),
+    http: bool = typer.Option(
+        False,
+        "--http/--stdio",
+        help="Serve over HTTP (streamable-http) at a URL+port instead of stdio.",
+    ),
+    host: Optional[str] = typer.Option(
+        None, "--host", help="HTTP bind address (default from config: 127.0.0.1)."
+    ),
+    port: Optional[int] = typer.Option(
+        None, "--port", help="HTTP port (default from config: 8890)."
+    ),
 ):
-    """Run the MCP server over stdio (for Claude Code / Cursor / VS Code)."""
+    """Run the MCP server.
+
+    Default is stdio (for Claude Code / Cursor / VS Code, which spawn the
+    process and talk over stdin/stdout). Pass ``--http`` to run a long-lived
+    network server reachable over a URL + port, with a ``GET /health`` check —
+    connect a client to ``http://<host>:<port>/mcp``.
+    """
     settings = _setup(verbose)
     from blackbook.server import build_server
+
+    # CLI flags override config for this run.
+    if host is not None:
+        settings.server.host = host
+    if port is not None:
+        settings.server.port = port
 
     # Open the db up front so the banner can report live corpus/graph stats
     # and the server reuses the same handle. All chrome goes to stderr — the
     # JSON-RPC protocol owns stdout.
     db = _db(settings)
-    if banner:
-        ui.print_banner(db=db, transport="stdio")
     server = build_server(settings, db)
-    server.run(transport="stdio")
+
+    if http:
+        base = f"http://{settings.server.host}:{settings.server.port}"
+        if banner:
+            ui.print_banner(
+                db=db, transport=f"streamable-http · {base}{settings.server.path}"
+            )
+        ui.info(f"MCP endpoint:  {base}{settings.server.path}", err_console)
+        ui.info(f"Health check:  {base}/health", err_console)
+        server.run(transport="streamable-http")
+    else:
+        if banner:
+            ui.print_banner(db=db, transport="stdio")
+        server.run(transport="stdio")
 
 
 @app.command()

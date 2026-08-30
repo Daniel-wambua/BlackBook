@@ -7,6 +7,8 @@ records the schema version and index version for staleness checks.
 
 from __future__ import annotations
 
+import sqlite3
+
 SCHEMA_VERSION = 2
 INDEX_VERSION = 1
 
@@ -158,10 +160,25 @@ CREATE INDEX IF NOT EXISTS idx_obs_case ON case_observations(case_id);
 
 
 def migrate(conn) -> None:
-    """Apply the schema and record versions. Idempotent."""
+    """Apply the schema and record versions. Idempotent.
+
+    Commits before returning so migration does not leave a write transaction
+    open. Python's sqlite3 opens an implicit transaction on the first write
+    (the ``_set_meta`` INSERTs); without this commit that transaction — and the
+    WAL writer lock it holds — would stay open for the life of the connection,
+    blocking every other instance from writing (e.g. a second server started
+    alongside the editor's stdio one). When the schema is already current the
+    write is skipped entirely, so read-only peers open with no lock contention.
+    """
+    if (
+        get_meta(conn, "schema_version") == str(SCHEMA_VERSION)
+        and get_meta(conn, "index_version") == str(INDEX_VERSION)
+    ):
+        return
     conn.executescript(SCHEMA)
     _set_meta(conn, "schema_version", str(SCHEMA_VERSION))
     _set_meta(conn, "index_version", str(INDEX_VERSION))
+    conn.commit()
 
 
 def _set_meta(conn, key: str, value: str) -> None:
@@ -173,5 +190,10 @@ def _set_meta(conn, key: str, value: str) -> None:
 
 
 def get_meta(conn, key: str) -> str | None:
-    row = conn.execute("SELECT value FROM meta WHERE key = ?", (key,)).fetchone()
+    try:
+        row = conn.execute("SELECT value FROM meta WHERE key = ?", (key,)).fetchone()
+    except sqlite3.OperationalError:
+        # meta table not created yet (fresh database) -> treat as unset so the
+        # caller proceeds to build the schema.
+        return None
     return row[0] if row else None

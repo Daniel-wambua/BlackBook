@@ -52,6 +52,13 @@ class Database:
         self.conn.row_factory = sqlite3.Row
         self.conn.execute("PRAGMA foreign_keys = ON")
         self.conn.execute("PRAGMA journal_mode = WAL")
+        # Wait (up to 5s) for a transient lock instead of failing immediately.
+        # WAL already lets readers and a single writer coexist; this covers the
+        # brief window when another instance (e.g. a stdio server the editor
+        # spawned, or a concurrent CLI ingest) is mid-commit — including the
+        # idempotent migrate() write below — so a second instance can start
+        # against the same DB rather than crashing with "database is locked".
+        self.conn.execute("PRAGMA busy_timeout = 5000")
         migrations.migrate(self.conn)
 
     # -- lifecycle --------------------------------------------------------

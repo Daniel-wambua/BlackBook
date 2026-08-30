@@ -56,7 +56,105 @@ def build_server(settings=None, db: Database | None = None) -> FastMCP:
             "verifiable provenance. BlackBook never executes commands or touches "
             "remote systems."
         ),
+        host=settings.server.host,
+        port=settings.server.port,
+        streamable_http_path=settings.server.path,
     )
+
+    # HTTP convenience routes. These are only reachable when the server runs
+    # under an HTTP transport (``--http``); they are inert under stdio. The MCP
+    # endpoint itself (``settings.server.path``, default ``/mcp``) is owned by
+    # the streamable-http transport and is a machine interface: a bare browser
+    # ``GET /mcp`` (no ``Accept: text/event-stream``) correctly gets 406, which
+    # looks alarming in the logs. So we give humans real places to land — a root
+    # page and ``/health`` — and silence the browser's favicon probe.
+    from starlette.requests import Request
+    from starlette.responses import HTMLResponse, JSONResponse, Response
+
+    def _health_payload() -> dict:
+        from blackbook import __version__
+
+        payload: dict = {
+            "status": "ok",
+            "service": "blackbook",
+            "version": __version__,
+            "transport": "streamable-http",
+            "mcp_endpoint": settings.server.path,
+        }
+        try:
+            payload["corpus"] = db.counts()
+        except Exception:  # pragma: no cover - health must never crash
+            payload["corpus"] = None
+        return payload
+
+    @mcp.custom_route("/health", methods=["GET"])
+    async def health(_request: Request) -> JSONResponse:
+        payload = _health_payload()
+        payload["tools"] = [t.name for t in await mcp.list_tools()]
+        return JSONResponse(payload)
+
+    @mcp.custom_route("/", methods=["GET"])
+    async def index(_request: Request) -> HTMLResponse:
+        # Friendly landing page so opening the base URL in a browser shows what
+        # this is and where to go — rather than a blank 404. Never raises.
+        from blackbook import __version__
+
+        mcp_path = settings.server.path
+        try:
+            tools = [t.name for t in await mcp.list_tools()]
+        except Exception:  # pragma: no cover - landing page must never crash
+            tools = []
+        try:
+            c = db.counts()
+            corpus = (
+                f"{c['sources']} sources · {c['documents']} docs · "
+                f"{c['chunks']} chunks · {c['entities']} entities · "
+                f"{c['relationships']} relationships"
+            )
+        except Exception:  # pragma: no cover
+            corpus = "unavailable"
+        tool_items = "".join(f"<li><code>{t}</code></li>" for t in tools)
+        html = f"""<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>BlackBook MCP</title>
+<style>
+  :root {{ color-scheme: light dark; }}
+  body {{ font: 15px/1.6 system-ui, sans-serif; max-width: 46rem; margin: 3rem auto;
+         padding: 0 1.25rem; }}
+  h1 {{ margin: 0 0 .25rem; letter-spacing: .02em; }}
+  .sub {{ opacity: .7; margin: 0 0 1.5rem; }}
+  code {{ background: color-mix(in srgb, currentColor 12%, transparent);
+          padding: .1em .4em; border-radius: .3em; }}
+  .grid {{ display: grid; grid-template-columns: 8rem 1fr; gap: .4rem 1rem; margin: 1rem 0; }}
+  .k {{ opacity: .6; }}
+  .note {{ opacity: .75; border-left: 3px solid color-mix(in srgb, currentColor 30%, transparent);
+           padding: .5rem .9rem; margin: 1.5rem 0; }}
+  ul {{ columns: 2; margin: .5rem 0; }}
+  a {{ color: inherit; }}
+</style></head><body>
+<h1>BlackBook MCP</h1>
+<p class="sub">Source-grounded cybersecurity knowledge &amp; research · v{__version__}</p>
+<div class="grid">
+  <span class="k">MCP endpoint</span><span><code>{mcp_path}</code> · streamable-http (for MCP clients)</span>
+  <span class="k">Health</span><span><a href="/health"><code>/health</code></a> · JSON status</span>
+  <span class="k">Corpus</span><span>{corpus}</span>
+</div>
+<p><strong>Tools</strong></p>
+<ul>{tool_items}</ul>
+<div class="note">
+  <code>{mcp_path}</code> is a machine endpoint — connect an MCP client to it, don't open it
+  in a browser (a plain browser request returns <code>406 Not Acceptable</code> by design).
+  To check the server from a browser, use <a href="/health">/health</a>.
+</div>
+</body></html>"""
+        return HTMLResponse(html)
+
+    @mcp.custom_route("/favicon.ico", methods=["GET"])
+    async def favicon(_request: Request) -> Response:
+        # Browsers auto-request this; answer 204 so it does not show as a 404.
+        return Response(status_code=204)
+
 
     @mcp.tool(
         name="knowledge_search",
@@ -237,15 +335,29 @@ def main() -> None:
     # Build settings + db first so the banner can report live corpus/graph
     # stats, then hand them to the server so nothing is opened twice. All
     # chrome (banner + logs) goes to stderr — stdout is the JSON-RPC stream.
+    #
+    # Transport defaults to stdio (how Claude Code / Cursor spawn the server).
+    # Set BLACKBOOK_TRANSPORT=streamable-http (or sse) to run as a network
+    # server reachable over a URL + port; the CLI ``serve --http`` does this.
+    import os
+
     from blackbook import ui
 
     settings = load_config()
     ensure_dirs(settings)
     ui.configure_logging()
+
+    transport = os.environ.get("BLACKBOOK_TRANSPORT", "stdio").strip() or "stdio"
     db = Database(settings.db_path)
-    ui.print_banner(db=db, transport="stdio")
     server = build_server(settings, db)
-    server.run(transport="stdio")
+
+    if transport in ("streamable-http", "sse"):
+        endpoint = f"http://{settings.server.host}:{settings.server.port}"
+        ui.print_banner(db=db, transport=f"{transport} · {endpoint}{settings.server.path}")
+        server.run(transport=transport)
+    else:
+        ui.print_banner(db=db, transport="stdio")
+        server.run(transport="stdio")
 
 
 if __name__ == "__main__":

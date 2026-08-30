@@ -91,6 +91,20 @@ class LoggingConfig(BaseModel):
     level: str = "INFO"
 
 
+class ServerConfig(BaseModel):
+    """Network settings for the HTTP transport.
+
+    Only consumed when the server is started with an HTTP transport
+    (``blackbook serve --http``). The stdio transport ignores these.
+    """
+
+    host: str = "127.0.0.1"
+    port: int = 8890
+    # Path the JSON-RPC (streamable-http) endpoint is mounted at. Clients
+    # connect to ``http://<host>:<port><path>``.
+    path: str = "/mcp"
+
+
 def _default_sources() -> list[SourceConfig]:
     return [
         SourceConfig(
@@ -135,6 +149,7 @@ class Settings(BaseSettings):
     embeddings: EmbeddingsConfig = Field(default_factory=EmbeddingsConfig)
     retrieval: RetrievalConfig = Field(default_factory=RetrievalConfig)
     logging: LoggingConfig = Field(default_factory=LoggingConfig)
+    server: ServerConfig = Field(default_factory=ServerConfig)
     sources: list[SourceConfig] = Field(default_factory=_default_sources)
 
     # ---- derived helpers -------------------------------------------------
