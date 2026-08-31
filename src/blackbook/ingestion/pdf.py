@@ -68,7 +68,13 @@ class PDFAdapter(SourceAdapter):
             if path.suffix.lower() != ".pdf":
                 continue
             if path.stat().st_size > self.config.max_document_bytes:
-                log.warning("skipping oversized pdf: %s", path)
+                log.warning(
+                    "skipping oversized pdf: %s (%.0f MB exceeds the %.0f MB "
+                    "sources.local_pdfs.max_document_bytes limit)",
+                    path,
+                    path.stat().st_size / (1024 * 1024),
+                    self.config.max_document_bytes / (1024 * 1024),
+                )
                 continue
             count += 1
             try:
@@ -88,6 +94,15 @@ class PDFAdapter(SourceAdapter):
             pages.append(analyze_page(page, i))
 
         if not any(p.text.strip() for p in pages):
+            # Typically a scanned/image-only PDF: there is nothing to index
+            # without OCR, which is out of scope for this adapter. Say so
+            # loudly instead of silently producing zero chunks.
+            log.warning(
+                "pdf has no extractable text (scanned/image-only?): %s "
+                "(%d pages): run it through OCR (e.g. ocrmypdf) first",
+                path,
+                len(pages),
+            )
             return None
 
         title = meta["title"]

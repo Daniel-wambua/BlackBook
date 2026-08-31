@@ -100,3 +100,56 @@ def test_pdf_rejects_out_of_directory(tmp_path):
     _make_structural_pdf(pdf_dir / "ok.pdf")
     docs = list(_adapter(pdf_dir, tmp_path).iter_documents())
     assert all(Path(d.path).parent == pdf_dir for d in docs)
+
+
+def test_oversized_pdf_warning_names_the_limit(tmp_path, caplog):
+    pdf_dir = tmp_path / "pdfs"
+    pdf_dir.mkdir()
+    target = pdf_dir / "big.pdf"
+    _make_structural_pdf(target)
+    cfg = SourceConfig(
+        id="local_pdfs", name="Local PDFs", type="filesystem",
+        authority="user", directory=str(pdf_dir),
+        max_document_bytes=10,  # impossibly small: everything is oversized
+    )
+    adapter = PDFAdapter(cfg, raw_dir=str(tmp_path))
+
+    with caplog.at_level("WARNING"):
+        docs = list(adapter.iter_documents())
+
+    assert docs == []
+    assert len(caplog.records) == 1
+    msg = caplog.records[0].getMessage()
+    # The warning must say *why* and *how to fix it*, not just name the file.
+    assert "big.pdf" in msg
+    assert "max_document_bytes" in msg
+    assert "exceeds" in msg
+
+
+def test_default_document_cap_is_generous():
+    # Security books routinely exceed 20 MB; the cap is a sanity guard, not a
+    # filter. The default must let realistic PDFs through (regression pin).
+    assert SourceConfig(
+        id="x", name="x", type="filesystem",
+    ).max_document_bytes >= 200 * 1024 * 1024
+
+
+def test_image_only_pdf_warns_and_yields_nothing(tmp_path, caplog):
+    pdf_dir = tmp_path / "pdfs"
+    pdf_dir.mkdir()
+    target = pdf_dir / "scanned.pdf"
+    # A PDF with no text operators at all: image-only / scanned.
+    c = canvas.Canvas(str(target), pagesize=LETTER)
+    c.showPage()
+    c.showPage()
+    c.save()
+
+    with caplog.at_level("WARNING"):
+        docs = list(_adapter(pdf_dir, tmp_path).iter_documents())
+
+    assert docs == []
+    assert len(caplog.records) == 1
+    msg = caplog.records[0].getMessage()
+    # Must point the user at OCR instead of silently producing zero chunks.
+    assert "scanned.pdf" in msg
+    assert "OCR" in msg

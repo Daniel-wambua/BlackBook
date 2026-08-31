@@ -19,7 +19,7 @@ sources:
     authority: trusted
     url: https://github.com/HackTricks-wiki/hacktricks.git
     # max_files: 50            # optionally bound ingestion size
-    # max_document_bytes: 20000000
+    # max_document_bytes: 209715200   # per-document cap (default 200 MB)
 
   - id: "0xdf"
     name: "0xdf"

@@ -55,7 +55,7 @@ class SourceConfig(BaseModel):
 
     # Fetch limits (security / cost control)
     max_files: int | None = None
-    max_document_bytes: int = 20 * 1024 * 1024  # 20 MB per document cap
+    max_document_bytes: int = 200 * 1024 * 1024  # 200 MB per document cap
     # Politeness delay between HTTP requests when crawling a website source
     # (seconds). Applies per request, not per document.
     request_delay: float = 0.5
