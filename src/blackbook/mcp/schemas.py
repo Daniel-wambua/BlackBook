@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 SearchMode = Literal["keyword", "semantic", "hybrid", "case_similarity", "technique"]
 Detail = Literal["brief", "standard", "deep"]
@@ -124,6 +124,7 @@ class TechniqueOutput(BaseModel):
     technique: str            # canonical term, or the caller's input echoed back
     resolved: bool            # True when it mapped to a controlled vocabulary term
     in_graph: bool            # True when a graph entity exists for it
+    attack_id: str | None = None  # curated MITRE ATT&CK ID, None when unmapped
     documented_by: list[GraphRef] = Field(default_factory=list)   # sources
     related_tools: list[GraphRef] = Field(default_factory=list)
     related_services: list[GraphRef] = Field(default_factory=list)
@@ -184,6 +185,7 @@ class TechniqueBrief(BaseModel):
     technique: str            # canonical term
     resolved: bool            # mapped to the controlled vocabulary
     in_graph: bool            # a graph entity exists for it
+    attack_id: str | None = None  # curated MITRE ATT&CK ID, None when unmapped
     documented_by: list[GraphRef] = Field(default_factory=list)
 
 
@@ -198,9 +200,26 @@ class ResearchOutput(BaseModel):
 
 # -- Phase 5: investigation context (local case layer) ----------------------
 
-CaseAction = Literal["create", "add", "update_observation", "get", "list"]
+CaseAction = Literal["create", "add", "update_observation", "get", "list", "export"]
 ObservationKind = Literal["observation", "finding", "hypothesis", "technique", "note"]
 ObservationStatus = Literal["open", "tested", "confirmed", "refuted", "resolved"]
+
+# Bound on the serialized size of a case's free-form ``meta`` dict. It is
+# user-supplied JSON written into SQLite over an (optionally network-exposed)
+# write path, so it gets a hard ceiling rather than a free pass.
+_META_MAX_BYTES = 16 * 1024
+
+
+def _check_meta(v: dict | None) -> dict | None:
+    import json
+
+    if v is None:
+        return None
+    if len(json.dumps(v, default=str)) > _META_MAX_BYTES:
+        raise ValueError(
+            f"meta is too large (limit {_META_MAX_BYTES} bytes serialized)"
+        )
+    return v
 
 
 class ContextInput(BaseModel):
@@ -213,6 +232,11 @@ class ContextInput(BaseModel):
     obs_id: int | None = None
     status: ObservationStatus | None = None
     meta: dict | None = None
+
+    @field_validator("meta")
+    @classmethod
+    def _bound_meta(cls, v: dict | None) -> dict | None:
+        return _check_meta(v)
 
 
 class ObservationItem(BaseModel):
@@ -247,4 +271,8 @@ class ContextOutput(BaseModel):
     ok: bool
     case: CaseState | None = None
     cases: list[CaseSummary] = Field(default_factory=list)
+    # Populated by action='export': the case rendered as portable Markdown.
+    # The server returns it in-band; use the CLI (`blackbook case export`) to
+    # write it to a file.
+    markdown: str = ""
     note: str = ""

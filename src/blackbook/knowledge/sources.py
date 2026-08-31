@@ -68,9 +68,15 @@ def find_document(
     if source_id and external_id:
         return db.get_document_by_external(source_id, external_id)
     if title_like:
+        # Escape LIKE wildcards in user input so a literal % or _ can't
+        # broaden the match (same treatment database.find_entities gives).
+        from blackbook.storage.database import _escape_like
+
+        pattern = f"%{_escape_like(title_like)}%"
         row = db.conn.execute(
-            "SELECT * FROM documents WHERE title LIKE ? ORDER BY title LIMIT 1",
-            (f"%{title_like}%",),
+            "SELECT * FROM documents WHERE title LIKE ? ESCAPE '\\' "
+            "ORDER BY title LIMIT 1",
+            (pattern,),
         ).fetchone()
         return dict(row) if row else None
     return None

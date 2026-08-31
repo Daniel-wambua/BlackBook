@@ -14,7 +14,7 @@ import logging
 
 from mcp.server.fastmcp import FastMCP
 
-from blackbook.config import ensure_dirs, load_config
+from blackbook.config import ensure_dirs, is_loopback_host, load_config
 from blackbook.mcp.schemas import (
     CaseSearchInput,
     CaseSearchOutput,
@@ -154,7 +154,18 @@ def build_server(settings=None, db: Database | None = None) -> FastMCP:
   To check the server from a browser, use <a href="/health">/health</a>.
 </div>
 </body></html>"""
-        return HTMLResponse(html)
+        # The page embeds only config-derived values, but a CSP header keeps
+        # it non-executable even if a future edit interpolates chunk text.
+        return HTMLResponse(
+            html,
+            headers={
+                "Content-Security-Policy": (
+                    "default-src 'none'; style-src 'unsafe-inline'; "
+                    "base-uri 'none'; frame-ancestors 'none'"
+                ),
+                "X-Content-Type-Options": "nosniff",
+            },
+        )
 
     @mcp.custom_route("/favicon.ico", methods=["GET"])
     async def favicon(_request: Request) -> Response:
@@ -168,8 +179,10 @@ def build_server(settings=None, db: Database | None = None) -> FastMCP:
             "Search the indexed cybersecurity knowledge corpus (HackTricks, 0xdf "
             "writeups, local PDFs). Returns concise, ranked results with exact "
             "source references (chunk_id/doc_id/url/page/section) that can be "
-            "resolved with knowledge_source. Filter by sources, platform, "
-            "categories, or techniques. Read-only."
+            "resolved with knowledge_source. ``sources``, ``platform`` and "
+            "``categories`` are hard filters: results only come from matching "
+            "documents (platform/categories match the document's tags, e.g. "
+            "windows/linux, htb, Easy/Insane). Read-only."
         ),
     )
     def knowledge_search(
@@ -248,8 +261,10 @@ def build_server(settings=None, db: Database | None = None) -> FastMCP:
             "Find hands-on writeups and case studies similar to a situation "
             "(favouring practical, walkthrough-style material). Each hit carries "
             "full provenance and, when the graph is built, the techniques it "
-            "demonstrates. Filter by sources or platform, and add known "
-            "techniques to sharpen the query. Read-only."
+            "demonstrates. ``sources`` and ``platform`` are hard filters "
+            "(platform matches the document's OS tag, e.g. Windows); known "
+            "techniques are resolved through the controlled vocabulary and "
+            "bias results toward writeups that demonstrate them. Read-only."
         ),
     )
     def knowledge_case_search(
@@ -305,7 +320,9 @@ def build_server(settings=None, db: Database | None = None) -> FastMCP:
             "(optional target/platform/meta); 'add' an observation/finding/"
             "hypothesis/technique/note to a case; 'update_observation' to set an "
             "observation's status (open/tested/confirmed/refuted/resolved); 'get' a "
-            "case's full state; 'list' all cases. Reads and writes only the local, "
+            "case's full state; 'list' all cases; 'export' a case as Markdown "
+            "(returned in-band — the server never writes files; use 'blackbook "
+            "case export' for that). Reads and writes only the local, "
             "user-authored case layer in the knowledge base — it never executes "
             "anything or touches remote systems. There is no delete action."
         ),
@@ -337,6 +354,42 @@ def build_server(settings=None, db: Database | None = None) -> FastMCP:
     return mcp
 
 
+def run_http(server: FastMCP, settings) -> None:
+    """Run the server over HTTP with auth and bind-safety applied.
+
+    Builds the Starlette app FastMCP would have built, wraps it in the
+    bearer-token middleware when ``server.auth_token`` is configured, and
+    runs uvicorn directly. This is the only sanctioned way to start the HTTP
+    transport — it guarantees ``enforce_bind_safety`` runs before the socket
+    is opened.
+    """
+    import uvicorn
+
+    from blackbook.mcp.auth import enforce_bind_safety, wrap_http_app
+
+    warning = enforce_bind_safety(settings)
+    if warning:
+        log.warning("%s", warning)
+        import sys
+
+        print(warning, file=sys.stderr)
+
+    app = server.streamable_http_app()
+    app = wrap_http_app(app, settings)
+
+    token = (settings.server.auth_token or "").strip()
+    if token:
+        log.info("HTTP transport: bearer-token auth enabled")
+
+    config = uvicorn.Config(
+        app,
+        host=settings.server.host,
+        port=settings.server.port,
+        log_level="info",
+    )
+    uvicorn.Server(config).run()
+
+
 def main() -> None:
     # Build settings + db first so the banner can report live corpus/graph
     # stats, then hand them to the server so nothing is opened twice. All
@@ -360,7 +413,7 @@ def main() -> None:
     if transport in ("streamable-http", "sse"):
         endpoint = f"http://{settings.server.host}:{settings.server.port}"
         ui.print_banner(db=db, transport=f"{transport} · {endpoint}{settings.server.path}")
-        server.run(transport=transport)
+        run_http(server, settings)
     else:
         ui.print_banner(db=db, transport="stdio")
         server.run(transport="stdio")

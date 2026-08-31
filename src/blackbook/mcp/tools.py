@@ -23,9 +23,10 @@ import json
 import logging
 
 from blackbook.config import Settings
+from blackbook.knowledge.case_export import build_case_state, render_case_markdown
 from blackbook.knowledge.graph import E_TECHNIQUE, E_WRITEUP, P_DEMONSTRATED_IN
 from blackbook.knowledge.sources import find_document, get_chunk_excerpt, list_document_chunks
-from blackbook.knowledge.vocab import extract_signals, resolve_technique
+from blackbook.knowledge.vocab import attack_id, extract_signals, resolve_technique
 from blackbook.mcp.schemas import (
     CaseItem,
     CaseSearchInput,
@@ -37,7 +38,6 @@ from blackbook.mcp.schemas import (
     EvidenceRef,
     GetSourceInput,
     GraphRef,
-    ObservationItem,
     ResearchInput,
     ResearchOutput,
     ResearchSignals,
@@ -69,11 +69,12 @@ class KnowledgeTools:
     # -- knowledge_search ---------------------------------------------------
 
     def knowledge_search(self, inp: SearchInput) -> SearchOutput:
-        source_ids = self.settings.source_ids(inp.sources)
-        # Merge explicit techniques into the query as additional terms.
-        query = inp.query
-        if inp.techniques:
-            query = query + " " + " ".join(inp.techniques)
+        requested, source_ids = self._resolve_sources(inp.sources)
+        # Techniques resolve through the controlled vocabulary: resolved terms
+        # still join the query (recall) *and* bias reranking toward chunks whose
+        # title/section names them (precision); unresolved ones remain plain
+        # query terms so a non-vocab technique is still searched.
+        query, resolved, unresolved = self._merge_techniques(inp.query, inp.techniques)
 
         results: list[SearchResult] = self.retriever.search(
             query,
@@ -81,20 +82,68 @@ class KnowledgeTools:
             source_ids=source_ids,
             platform=inp.platform,
             categories=inp.categories,
+            techniques=resolved,
             limit=inp.limit,
         )
         items = [self._to_item(r, inp.detail) for r in results]
         note = ""
-        if not items:
+        if source_ids == []:
+            note = (
+                f"No enabled source matches {requested}; nothing was searched. "
+                "Check the source ID with `blackbook sources`."
+            )
+        elif not items:
             note = "No matching material found in the selected sources."
+        if unresolved:
+            extra = (
+                "Techniques not in the controlled vocabulary were searched as "
+                f"plain terms: {', '.join(unresolved)}."
+            )
+            note = f"{note} {extra}".strip()
         return SearchOutput(
             query=inp.query,
             mode=inp.mode,
-            sources_searched=source_ids,
+            sources_searched=source_ids if source_ids is not None else ["all"],
             count=len(items),
             results=items,
             note=note,
         )
+
+    @staticmethod
+    def _merge_techniques(
+        query: str, techniques: list[str] | None
+    ) -> tuple[str, list[str], list[str]]:
+        """Fold ``techniques`` into ``query``, splitting resolved/unresolved.
+
+        Returns ``(query, resolved, unresolved)``: every technique term joins
+        the query text for recall, while the vocabulary-resolved ones are
+        returned separately so the caller can pass them on as a reranking bias
+        (they favour chunks whose title/section names the technique).
+        """
+        resolved: list[str] = []
+        unresolved: list[str] = []
+        for t in techniques or []:
+            canonical = resolve_technique(t)
+            if canonical:
+                if canonical not in resolved:
+                    resolved.append(canonical)
+            else:
+                unresolved.append(t)
+        extra = " ".join(resolved + unresolved)
+        merged = f"{query} {extra}".strip() if extra else query
+        return merged, resolved, unresolved
+
+    def _resolve_sources(
+        self, requested: list[str] | None
+    ) -> tuple[list[str], list[str] | None]:
+        """Resolve a source filter, keeping the caller's intent visible.
+
+        Returns ``(requested, resolved)`` where ``resolved`` is ``None`` for
+        "every enabled source" and possibly ``[]`` when nothing matched —
+        which callers surface as an explicit note rather than silently
+        searching everything.
+        """
+        return requested or [], self.settings.source_ids(requested)
 
     def _to_item(self, r: SearchResult, detail: str) -> SearchResultItem:
         snippet = r.snippet if detail != "deep" else r.text[:1200]
@@ -144,6 +193,21 @@ class KnowledgeTools:
             doc = find_document(self.db, title_like=inp.title_contains)
 
         if not doc:
+            if inp.source and not inp.document:
+                # The caller named a source but no document — a source alone
+                # can't identify an excerpt. Point at real documents from that
+                # source so the next call has something concrete to use.
+                sample = [
+                    d["title"]
+                    for d in list(self.db.iter_documents([inp.source]))[:5]
+                ]
+                hint = (
+                    f"'{inp.source}' is a source, not a document — provide its "
+                    "`document` (external_id) or a `title_contains`. Indexed "
+                    f"documents from this source include: "
+                    + (", ".join(sample) if sample else "(none indexed)")
+                )
+                return SourceOutput(count=0, excerpts=[], note=hint)
             return SourceOutput(
                 count=0,
                 excerpts=[],
@@ -194,6 +258,16 @@ class KnowledgeTools:
         source_ids = self.settings.source_ids(inp.sources)
         canonical = resolve_technique(inp.technique)
         term = canonical or inp.technique
+        if source_ids == []:
+            return TechniqueOutput(
+                technique=term,
+                resolved=canonical is not None,
+                in_graph=False,
+                note=(
+                    f"No enabled source matches {inp.sources}; nothing was searched. "
+                    "Check the source ID with `blackbook sources`."
+                ),
+            )
 
         documented_by: list[GraphRef] = []
         related_tools: list[GraphRef] = []
@@ -239,6 +313,7 @@ class KnowledgeTools:
             technique=term,
             resolved=canonical is not None,
             in_graph=in_graph,
+            attack_id=attack_id(term),
             documented_by=documented_by,
             related_tools=related_tools,
             related_services=related_services,
@@ -280,9 +355,17 @@ class KnowledgeTools:
         chunks with full provenance.
         """
         source_ids = self.settings.source_ids(inp.sources)
-        query = inp.query
-        if inp.techniques:
-            query = query + " " + " ".join(inp.techniques)
+        query, resolved, _ = self._merge_techniques(inp.query, inp.techniques)
+        if source_ids == []:
+            return CaseSearchOutput(
+                query=inp.query,
+                count=0,
+                results=[],
+                note=(
+                    f"No enabled source matches {inp.sources}; nothing was searched. "
+                    "Check the source ID with `blackbook sources`."
+                ),
+            )
 
         results = self.retriever.search(
             query,
@@ -290,6 +373,7 @@ class KnowledgeTools:
             source_ids=source_ids,
             platform=inp.platform,
             categories=None,
+            techniques=resolved,
             limit=inp.limit,
         )
         items = [self._case_item(r) for r in results]
@@ -364,6 +448,17 @@ class KnowledgeTools:
         """
         source_ids = self.settings.source_ids(inp.sources)
         services, techniques, tools = extract_signals(inp.observation)
+        if source_ids == []:
+            return ResearchOutput(
+                observation=inp.observation,
+                signals=ResearchSignals(
+                    services=services, techniques=techniques, tools=tools
+                ),
+                note=(
+                    f"No enabled source matches {inp.sources}; nothing was searched. "
+                    "Check the source ID with `blackbook sources`."
+                ),
+            )
 
         # Union of techniques detected in the text and any explicitly supplied,
         # each mapped through the controlled vocabulary; unresolved extras drop.
@@ -387,6 +482,7 @@ class KnowledgeTools:
                     technique=term,
                     resolved=resolve_technique(term) is not None,
                     in_graph=in_graph,
+                    attack_id=attack_id(term),
                     documented_by=documented_by,
                 )
             )
@@ -404,6 +500,7 @@ class KnowledgeTools:
             source_ids=source_ids,
             platform=inp.platform,
             categories=None,
+            techniques=canonical_techs,
             limit=inp.limit,
         )
         references = [self._to_item(r, "standard") for r in results]
@@ -416,6 +513,7 @@ class KnowledgeTools:
                 source_ids=source_ids,
                 platform=inp.platform,
                 categories=None,
+                techniques=canonical_techs,
                 limit=inp.limit,
             )
             related_cases = [self._case_item(r) for r in case_hits]
@@ -450,7 +548,9 @@ class KnowledgeTools:
         * ``add`` — append an observation/finding/hypothesis/etc. to a case;
         * ``update_observation`` — set an existing observation's status;
         * ``get`` — return a case's full current state;
-        * ``list`` — summarise all cases.
+        * ``list`` — summarise all cases;
+        * ``export`` — render a case as portable Markdown (returned in-band;
+          the server never writes files — ``blackbook case export`` does).
 
         There is deliberately no delete action — the tool cannot destroy state.
         """
@@ -473,6 +573,28 @@ class KnowledgeTools:
                 ok=True,
                 cases=cases,
                 note="" if cases else "No cases yet.",
+            )
+
+        if action == "export":
+            if not inp.case:
+                return ContextOutput(
+                    action=action, ok=False, note="'case' is required for export."
+                )
+            state = self._case_state(inp.case)
+            if state is None:
+                return ContextOutput(
+                    action=action, ok=False, note=f"Case '{inp.case}' not found."
+                )
+            markdown = render_case_markdown(state)
+            return ContextOutput(
+                action=action,
+                ok=True,
+                case=state,
+                markdown=markdown,
+                note=(
+                    "Markdown returned in-band; run 'blackbook case export "
+                    f"{inp.case}' to write it to a file."
+                ),
             )
 
         if action == "get":
@@ -561,25 +683,4 @@ class KnowledgeTools:
 
     def _case_state(self, name: str) -> CaseState | None:
         """Compose a case's row and its observations into a CaseState."""
-        case = self.db.get_case(name)
-        if case is None:
-            return None
-        observations = [
-            ObservationItem(
-                obs_id=int(o["obs_id"]),
-                kind=o["kind"],
-                text=o["text"],
-                status=o["status"],
-                created_at=o.get("created_at"),
-            )
-            for o in self.db.list_observations(int(case["case_id"]))
-        ]
-        return CaseState(
-            case_id=int(case["case_id"]),
-            name=case["name"],
-            target=case.get("target") or "",
-            platform=case.get("platform") or "",
-            created_at=case.get("created_at"),
-            updated_at=case.get("updated_at"),
-            observations=observations,
-        )
+        return build_case_state(self.db, name)

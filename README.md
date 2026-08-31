@@ -252,13 +252,21 @@ blackbook search "kerberoasting"
 blackbook search "windows service privilege escalation" --source hacktricks
 blackbook search "NTLM relay" --platform windows --limit 5
 blackbook search "crack service account passwords" --mode semantic  # paraphrase-friendly
-blackbook stats
-blackbook sources
+blackbook stats [--json]        # corpus counts (machine-readable with --json)
+blackbook sources [--json]
 blackbook graph build     # (re)build the knowledge graph from the index
-blackbook graph show      # graph entity/relationship counts
+blackbook graph show [--json]   # graph entity/relationship counts
 blackbook doctor          # diagnostics: db, index, sources, embeddings
 blackbook rebuild-index   # rebuild the FTS5 index
+blackbook case export MY-CASE   # export an investigation case as Markdown
+blackbook backup          # snapshot the knowledge base (VACUUM INTO)
 ```
+
+`platform` and `categories` are **hard filters** — results only come from
+documents carrying the tag (e.g. `windows`/`linux`, `htb`, `Easy`/`Insane`).
+The MCP tools' `techniques` parameter resolves through the controlled
+vocabulary and biases results toward chunks whose heading names the technique;
+unknown terms are searched as plain keywords and flagged in the response note.
 
 Search modes: `hybrid` (default, lexical + semantic), `keyword` (FTS5 only),
 `semantic` (embeddings only), plus two intent-biased modes: `technique` (nudges

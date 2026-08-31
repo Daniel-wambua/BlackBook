@@ -13,6 +13,7 @@ and how they are fetched) and for retrieval behaviour.
 
 from __future__ import annotations
 
+import ipaddress
 import os
 from pathlib import Path
 from typing import Literal
@@ -55,6 +56,9 @@ class SourceConfig(BaseModel):
     # Fetch limits (security / cost control)
     max_files: int | None = None
     max_document_bytes: int = 20 * 1024 * 1024  # 20 MB per document cap
+    # Politeness delay between HTTP requests when crawling a website source
+    # (seconds). Applies per request, not per document.
+    request_delay: float = 0.5
 
     @field_validator("id", "name", mode="before")
     @classmethod
@@ -103,6 +107,13 @@ class ServerConfig(BaseModel):
     # Path the JSON-RPC (streamable-http) endpoint is mounted at. Clients
     # connect to ``http://<host>:<port><path>``.
     path: str = "/mcp"
+    # Optional bearer token guarding the HTTP transport. When set, requests
+    # must carry ``Authorization: Bearer <token>`` or they get 401. Strongly
+    # recommended whenever binding a non-loopback address.
+    auth_token: str = ""
+    # Refuse to start on a non-loopback address when no auth_token is set.
+    # Flip to false only if you understand the exposure.
+    require_auth_off_loopback: bool = True
 
 
 def _default_sources() -> list[SourceConfig]:
@@ -174,16 +185,35 @@ class Settings(BaseSettings):
     def enabled_sources(self) -> list[SourceConfig]:
         return [s for s in self.sources if s.enabled]
 
-    def source_ids(self, requested: list[str] | None) -> list[str]:
+    def source_ids(self, requested: list[str] | None) -> list[str] | None:
         """Resolve a requested source filter to concrete source IDs.
 
-        ``None`` or ``["all"]`` means every enabled source. Unknown IDs are
-        silently dropped so a typo never widens the query beyond intent.
+        Returns ``None`` for "every enabled source" (no filter), or a list of
+        matching IDs. Unknown IDs are dropped so a typo can never *widen* the
+        query beyond intent: if every requested ID is unknown the result is an
+        empty list, which callers must treat as "search nothing" — never as
+        "search everything".
         """
         enabled = {s.id for s in self.enabled_sources()}
         if not requested or requested == ["all"]:
-            return sorted(enabled)
+            return None
         return [sid for sid in requested if sid in enabled]
+
+
+def is_loopback_host(host: str) -> bool:
+    """True when ``host`` binds a loopback-only interface.
+
+    Accepts the obvious spellings (``127.0.0.1``, ``localhost``, ``::1``) and
+    anything inside the loopback ranges; unparseable hostnames (e.g. a DNS
+    name that resolves elsewhere) are conservatively treated as non-loopback.
+    """
+    h = (host or "").strip()
+    if h.lower() in ("localhost", "::1", "ip6-localhost"):
+        return True
+    try:
+        return ipaddress.ip_address(h).is_loopback
+    except ValueError:
+        return False
 
 
 def load_config(config_path: str | Path | None = None) -> Settings:

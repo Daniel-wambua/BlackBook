@@ -73,6 +73,46 @@ _TECHNIQUE_SET = frozenset(TECHNIQUE_TERMS)
 _TOOL_SET = frozenset(TOOL_TERMS)
 _SERVICE_SET = frozenset(SERVICE_TERMS)
 
+#: Curated MITRE ATT&CK IDs for the vocabulary's technique terms. This is
+#: hand-maintained reference metadata (not extracted from indexed sources);
+#: techniques without a well-established mapping are deliberately absent so
+#: the field can be trusted when present — an unmapped technique yields
+#: ``None``, never a guessed ID.
+TECHNIQUE_ATTACK_IDS: dict[str, str] = {
+    "kerberoasting": "T1558.003",
+    "as-rep roasting": "T1558.004",
+    "golden ticket": "T1558.001",
+    "silver ticket": "T1558.002",
+    "pass the hash": "T1550.002",
+    "dcsync": "T1003.006",
+    "password spraying": "T1110.003",
+    "ntlm relay": "T1557.001",
+    "unconstrained delegation": "T1550.001",
+    "constrained delegation": "T1550.001",
+    "rbcd": "T1550.001",
+    "shadow credentials": "T1550",
+    "certifried": "T1649",
+    "esc1": "T1649",
+    "deserialization": "T1203",
+    "privilege escalation": "T1068",
+    "sql injection": "T1190",
+    "ssrf": "T1190",
+    "ssti": "T1190",
+    "lfi": "T1190",
+    "rfi": "T1190",
+    "xss": "T1059.007",
+}
+
+
+def attack_id(technique: str) -> str | None:
+    """MITRE ATT&CK ID for a technique term (or alias), or ``None``.
+
+    Resolves through :func:`resolve_technique` first so aliases ("kerberoast",
+    "pth") work. Never invents an ID: unmapped techniques return ``None``.
+    """
+    canonical = resolve_technique(technique)
+    return TECHNIQUE_ATTACK_IDS.get(canonical) if canonical else None
+
 
 def _found(terms: list[str], lowered: str) -> list[str]:
     """Return the sorted subset of ``terms`` that literally occur in ``lowered``."""

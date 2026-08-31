@@ -14,8 +14,10 @@ Administration and diagnostics for the knowledge base:
 
 from __future__ import annotations
 
+import json
 import logging
 import sys
+from pathlib import Path
 from typing import Optional
 
 import typer
@@ -241,6 +243,13 @@ def search(
     db = _db(settings)
     retriever = HybridRetriever(db, settings)
     source_ids = settings.source_ids([source] if source else None)
+    if source_ids == []:
+        err_console.print(
+            f"[red]No enabled source matches:[/red] {source} — run `blackbook sources` "
+            "to list valid IDs. Refusing to search everything by accident."
+        )
+        db.close()
+        raise typer.Exit(code=2)
     results = retriever.search(query, mode=mode, source_ids=source_ids, platform=platform, limit=limit)
 
     if not results:
@@ -267,11 +276,27 @@ def search(
 
 
 @app.command()
-def stats(verbose: bool = typer.Option(False, "--verbose", "-v")):
+def stats(
+    verbose: bool = typer.Option(False, "--verbose", "-v"),
+    as_json: bool = typer.Option(False, "--json", help="Emit machine-readable JSON"),
+):
     """Show knowledge-base statistics."""
     settings = _setup(verbose)
     db = _db(settings)
     counts = db.counts()
+    rows = db.conn.execute(
+        """
+        SELECT d.source_id, COUNT(DISTINCT d.doc_id) AS docs, COUNT(c.chunk_id) AS chunks
+        FROM documents d LEFT JOIN chunks c ON c.doc_id = d.doc_id
+        GROUP BY d.source_id ORDER BY d.source_id
+        """
+    ).fetchall()
+    per_source = {r["source_id"]: {"docs": r["docs"], "chunks": r["chunks"]} for r in rows}
+    if as_json:
+        console.print_json(json.dumps({"counts": counts, "per_source": per_source}))
+        db.close()
+        return
+
     table = Table(title="BlackBook Knowledge Base")
     table.add_column("Metric", style="cyan")
     table.add_column("Count", justify="right")
@@ -280,13 +305,6 @@ def stats(verbose: bool = typer.Option(False, "--verbose", "-v")):
     console.print(table)
 
     # Per-source document counts.
-    rows = db.conn.execute(
-        """
-        SELECT d.source_id, COUNT(DISTINCT d.doc_id) AS docs, COUNT(c.chunk_id) AS chunks
-        FROM documents d LEFT JOIN chunks c ON c.doc_id = d.doc_id
-        GROUP BY d.source_id ORDER BY d.source_id
-        """
-    ).fetchall()
     if rows:
         st = Table(title="Per-source")
         st.add_column("Source", style="cyan")
@@ -299,12 +317,31 @@ def stats(verbose: bool = typer.Option(False, "--verbose", "-v")):
 
 
 @app.command()
-def sources(verbose: bool = typer.Option(False, "--verbose", "-v")):
+def sources(
+    verbose: bool = typer.Option(False, "--verbose", "-v"),
+    as_json: bool = typer.Option(False, "--json", help="Emit machine-readable JSON"),
+):
     """List configured and indexed sources."""
     settings = _setup(verbose)
     db = _db(settings)
     configured = {s.id: s for s in settings.sources}
     indexed = {s["source_id"]: s for s in db.list_sources()}
+
+    if as_json:
+        payload = [
+            {
+                "id": sid,
+                "name": cfg.name,
+                "type": cfg.type,
+                "authority": cfg.authority,
+                "enabled": cfg.enabled,
+                "indexed": sid in indexed,
+            }
+            for sid, cfg in configured.items()
+        ]
+        console.print_json(json.dumps(payload))
+        db.close()
+        return
 
     table = Table(title="Sources")
     table.add_column("ID", style="cyan")
@@ -392,7 +429,10 @@ def graph_build(verbose: bool = typer.Option(False, "--verbose", "-v")):
 
 
 @graph_app.command("show")
-def graph_show(verbose: bool = typer.Option(False, "--verbose", "-v")):
+def graph_show(
+    verbose: bool = typer.Option(False, "--verbose", "-v"),
+    as_json: bool = typer.Option(False, "--json", help="Emit machine-readable JSON"),
+):
     """Show current knowledge-graph statistics without rebuilding."""
     settings = _setup(verbose)
     db = _db(settings)
@@ -408,6 +448,17 @@ def graph_show(verbose: bool = typer.Option(False, "--verbose", "-v")):
         stats.by_entity_type[e["entity_type"]] = (
             stats.by_entity_type.get(e["entity_type"], 0) + 1
         )
+    if as_json:
+        payload = {
+            "entities": stats.entities,
+            "relationships": stats.relationships,
+            "documents": stats.documents,
+            "by_entity_type": stats.by_entity_type,
+            "by_predicate": stats.by_predicate,
+        }
+        console.print_json(json.dumps(payload))
+        db.close()
+        return
     if stats.entities == 0:
         console.print(
             "[yellow]Graph is empty.[/yellow] Run `blackbook graph build` "
@@ -724,6 +775,8 @@ def serve(
     server = build_server(settings, db)
 
     if http:
+        from blackbook.server import run_http
+
         base = f"http://{settings.server.host}:{settings.server.port}"
         if banner:
             ui.print_banner(
@@ -731,11 +784,94 @@ def serve(
             )
         ui.info(f"MCP endpoint:  {base}{settings.server.path}", err_console)
         ui.info(f"Health check:  {base}/health", err_console)
-        server.run(transport="streamable-http")
+        if (settings.server.auth_token or "").strip():
+            ui.info("Auth:          bearer token required", err_console)
+        run_http(server, settings)
     else:
         if banner:
             ui.print_banner(db=db, transport="stdio")
         server.run(transport="stdio")
+
+
+case_app = typer.Typer(
+    add_completion=False,
+    help="Investigation case management (the local case layer).",
+)
+app.add_typer(case_app, name="case")
+
+
+@case_app.command("export")
+def case_export(
+    name: str = typer.Argument(..., help="Case name"),
+    out: Optional[Path] = typer.Option(
+        None, "--out", "-o", help="Output file (default: ~/.blackbook/exports/<case>-<date>.md)"
+    ),
+    stdout: bool = typer.Option(False, "--stdout", help="Print to stdout instead of a file"),
+    verbose: bool = typer.Option(False, "--verbose", "-v"),
+):
+    """Export a case as a standalone Markdown report."""
+    from blackbook.knowledge.case_export import (
+        build_case_state,
+        export_filename,
+        render_case_markdown,
+    )
+
+    settings = _setup(verbose)
+    db = _db(settings)
+    state = build_case_state(db, name)
+    if state is None:
+        console.print(f"[red]Case '{name}' not found.[/red]")
+        raise typer.Exit(code=1)
+    markdown = render_case_markdown(state)
+    db.close()
+
+    if stdout:
+        console.print(markdown, markup=False, highlight=False)
+        return
+    if out is None:
+        out = settings.home / "exports" / export_filename(name)
+    out = out.expanduser()
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(markdown, encoding="utf-8")
+    console.print(f"[green]Exported {len(state.observations)} observations to {out}[/green]")
+
+
+@app.command()
+def backup(
+    out: Optional[Path] = typer.Option(
+        None, "--out", "-o", help="Backup file (default: ~/.blackbook/backups/blackbook-<date>.db)"
+    ),
+    verbose: bool = typer.Option(False, "--verbose", "-v"),
+):
+    """Create a consistent, compact backup of the knowledge base.
+
+    Uses SQLite's ``VACUUM INTO``, which snapshots the database while it is
+    in use (readers keep working) and defragments the copy. The backup is a
+    fully standalone database — restore by pointing ``BLACKBOOK_DATABASE__PATH``
+    (or the config's ``database.path``) at it.
+    """
+    from datetime import date
+
+    settings = _setup(verbose)
+    db = _db(settings)
+    if out is None:
+        out = settings.home / "backups" / f"blackbook-{date.today().isoformat()}.db"
+    out = out.expanduser()
+    if out.exists():
+        console.print(f"[red]{out} already exists; refusing to overwrite.[/red]")
+        raise typer.Exit(code=1)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        db.conn.execute("VACUUM INTO ?", (str(out),))
+    except Exception as e:
+        console.print(f"[red]Backup failed:[/red] {e}")
+        raise typer.Exit(code=1) from e
+    size = out.stat().st_size
+    console.print(
+        f"[green]Backed up {settings.db_path} -> {out}[/green] "
+        f"({size / (1024 * 1024):.1f} MiB)"
+    )
+    db.close()
 
 
 @app.command()

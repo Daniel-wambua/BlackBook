@@ -24,7 +24,12 @@ import logging
 
 from blackbook.config import Settings
 from blackbook.embeddings import Embedder
-from blackbook.retrieval.lexical import LexicalHit, _json_list, _make_snippet
+from blackbook.retrieval.lexical import (
+    LexicalHit,
+    _doc_date,
+    _json_list,
+    _make_snippet,
+)
 from blackbook.storage.database import Database
 
 log = logging.getLogger(__name__)
@@ -52,9 +57,11 @@ class SemanticRetriever:
         )
         self.model_name = self.embedder.model_name
         # Cache of decoded vector matrices keyed by the source-filter signature.
-        # Each entry is (embedding_count_at_load, chunk_ids, matrix). The count
-        # guard invalidates the cache after a re-embed so results never go stale
-        # within a long-lived server process.
+        # Each entry is (embeddings_version_at_load, chunk_ids, matrix). The
+        # version counter (bumped on *any* chunk/embedding change, see
+        # Database._bump_embeddings_version) invalidates the cache after a
+        # re-embed — and after a delete+add that leaves the row count unchanged,
+        # which the old count-based guard silently missed.
         self._cache: dict[tuple[str, ...] | None, tuple[int, list[int], object]] = {}
 
     # -- public API --------------------------------------------------------
@@ -68,6 +75,9 @@ class SemanticRetriever:
     ) -> list[LexicalHit]:
         query = (query or "").strip()
         if not query:
+            return []
+        # An empty source list means "no sources in scope" — never widen to all.
+        if source_ids is not None and not source_ids:
             return []
 
         ids, matrix = self._matrix(source_ids)
@@ -121,6 +131,7 @@ class SemanticRetriever:
                     snippet=_make_snippet(row["text"], query),
                     metadata={
                         "categories": _json_list(row.get("categories")),
+                        "date": _doc_date(row.get("doc_metadata")),
                         "retrieval": "semantic",
                         "cosine": cos,
                     },
@@ -134,12 +145,15 @@ class SemanticRetriever:
         """Return ``(chunk_ids, matrix)`` for the given source filter.
 
         Results are cached per source-filter signature and invalidated when the
-        total embedding count changes (i.e. after a re-embed).
+        embeddings version changes (any insert/delete/re-chunk bumps it), so
+        results never go stale within a long-lived server process.
         """
-        sig: tuple[str, ...] | None = tuple(sorted(source_ids)) if source_ids else None
-        total = self.db.embedding_count(self.model_name)
+        sig: tuple[str, ...] | None = (
+            tuple(sorted(source_ids)) if source_ids is not None else None
+        )
+        version = self.db.embeddings_version()
         cached = self._cache.get(sig)
-        if cached is not None and cached[0] == total:
+        if cached is not None and cached[0] == version:
             return cached[1], cached[2]
 
         ids, blobs = self.db.load_embeddings(self.model_name, source_ids=source_ids)
@@ -147,5 +161,5 @@ class SemanticRetriever:
         # Keep chunk_ids aligned with the rows that survived decoding (a stale
         # vector of the wrong dimensionality is dropped by matrix_from_blobs).
         kept_ids = [ids[i] for i in kept]
-        self._cache[sig] = (total, kept_ids, matrix)
+        self._cache[sig] = (version, kept_ids, matrix)
         return kept_ids, matrix

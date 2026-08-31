@@ -62,11 +62,19 @@ class LexicalRetriever:
         *,
         source_ids: list[str] | None = None,
         limit: int = 50,
+        platform: str | None = None,
+        categories: list[str] | None = None,
     ) -> list[LexicalHit]:
         match = normalize_query(query)
         if match == '""':
             return []
-        rows = self.db.fts_search(match, source_ids=source_ids, limit=limit)
+        rows = self.db.fts_search(
+            match,
+            source_ids=source_ids,
+            limit=limit,
+            platform=platform,
+            categories=categories,
+        )
         hits: list[LexicalHit] = []
         for r in rows:
             # FTS5 bm25() returns 0 for a non-match and increasingly *negative*
@@ -93,10 +101,35 @@ class LexicalRetriever:
                     path=r.get("path"),
                     page=r.get("page"),
                     snippet=_make_snippet(r["text"], query),
-                    metadata={"categories": _json_list(r.get("categories"))},
+                    metadata={
+                        "categories": _json_list(r.get("categories")),
+                        "date": _doc_date(r.get("doc_metadata")),
+                    },
                 )
             )
         return hits
+
+
+def _doc_date(val: Any) -> str | None:
+    """Pull a document date (YYYY-MM-DD) from the document metadata blob.
+
+    0xdf writeups carry ``metadata.date``; other sources usually have none,
+    in which case the hit simply has no date and recency never applies.
+    """
+    import json
+
+    if not val:
+        return None
+    if isinstance(val, str):
+        try:
+            val = json.loads(val)
+        except Exception:
+            return None
+    if isinstance(val, dict):
+        d = val.get("date")
+        if isinstance(d, str) and len(d) >= 10:
+            return d[:10]
+    return None
 
 
 def _json_list(val: Any) -> list[str]:

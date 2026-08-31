@@ -72,6 +72,7 @@ class HybridRetriever:
         source_ids: list[str] | None = None,
         platform: str | None = None,
         categories: list[str] | None = None,
+        techniques: list[str] | None = None,
         limit: int | None = None,
     ) -> list[SearchResult]:
         cfg = self.settings.retrieval
@@ -82,7 +83,13 @@ class HybridRetriever:
 
         lexical_hits: list[LexicalHit] = []
         if mode in ("keyword", "hybrid", "technique", "case_similarity"):
-            lexical_hits = self.lexical.search(query, source_ids=source_ids, limit=pool_size)
+            lexical_hits = self.lexical.search(
+                query,
+                source_ids=source_ids,
+                limit=pool_size,
+                platform=platform,
+                categories=categories,
+            )
 
         semantic_hits: list[LexicalHit] = []
         if mode in ("semantic", "hybrid") and self.settings.embeddings.enabled:
@@ -96,6 +103,7 @@ class HybridRetriever:
             per_document_cap=cfg.per_document_cap,
             platform=platform,
             categories=categories,
+            techniques=techniques,
             mode=mode,
         )
         return [SearchResult.from_hit(h) for h in ranked]

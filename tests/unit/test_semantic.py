@@ -226,7 +226,7 @@ def test_semantic_no_embeddings_returns_empty(tmp_path, seeded_db):
     assert sr.search("kerberoast") == []
 
 
-def test_semantic_cache_invalidates_on_count_change(tmp_path, seeded_db):
+def test_semantic_cache_invalidates_on_delete(tmp_path, seeded_db):
     emb = FakeEmbedder()
     _embed_all(seeded_db, emb)
     settings = make_settings(tmp_path)
@@ -240,6 +240,58 @@ def test_semantic_cache_invalidates_on_count_change(tmp_path, seeded_db):
         seeded_db.delete_embeddings(emb.model_name)
     ids_c, mat_c = sr._matrix(None)
     assert ids_c == [] and mat_c is not mat_a  # invalidated
+
+
+def test_semantic_cache_invalidates_on_same_count_change(tmp_path, seeded_db):
+    """Replace one vector: embedding *count* is unchanged, so the old
+    count-based cache guard kept the stale matrix. The version counter must
+    still invalidate it."""
+    emb = FakeEmbedder()
+    _embed_all(seeded_db, emb)
+    settings = make_settings(tmp_path)
+    sr = SemanticRetriever(seeded_db, settings, embedder=emb)
+
+    ids_a, mat_a = sr._matrix(None)
+    assert len(ids_a) == 3
+
+    with seeded_db.session():
+        seeded_db.upsert_embedding(
+            ids_a[0],
+            emb.model_name,
+            emb.dim,
+            emb.to_bytes(emb.encode_one("totally different tokens xyzzy plugh")),
+        )
+    # The count is unchanged — only the version moved.
+    assert seeded_db.embedding_count(emb.model_name) == 3
+    assert seeded_db.embeddings_version() > 0
+
+    ids_b, mat_b = sr._matrix(None)
+    assert mat_b is not mat_a  # invalidated despite the same count
+    assert ids_b == ids_a
+
+
+def test_semantic_cache_invalidates_on_rechunk(tmp_path, seeded_db):
+    """Re-chunking a document cascade-deletes its vectors; the cache must not
+    keep serving the old matrix even though no embeddings were touched."""
+    from blackbook.storage import Chunk
+
+    emb = FakeEmbedder()
+    _embed_all(seeded_db, emb)
+    sr = SemanticRetriever(seeded_db, make_settings(tmp_path), embedder=emb)
+
+    ids_a, mat_a = sr._matrix(None)
+    assert len(ids_a) == 3
+
+    with seeded_db.session():
+        seeded_db.replace_chunks(
+            1,
+            [Chunk(doc_id=1, ordinal=0, text="rechunked body", section_path=[],
+                   token_estimate=2, content_hash="rechunked")],
+        )
+    ids_b, mat_b = sr._matrix(None)
+    assert mat_b is not mat_a
+    # Doc 1 owned chunks 1-2; only doc 2's vector (chunk 3) survives.
+    assert ids_b == [3]
 
 
 # --------------------------------------------------------------------------

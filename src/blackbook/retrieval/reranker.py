@@ -11,7 +11,11 @@ from __future__ import annotations
 from dataclasses import replace
 from typing import Iterable
 
-from blackbook.knowledge.vocab import extract_terms, is_writeup_category
+from blackbook.knowledge.vocab import (
+    extract_terms,
+    is_writeup_category,
+    resolve_technique,
+)
 from blackbook.retrieval.dedup import shingle_overlap
 from blackbook.retrieval.lexical import LexicalHit
 
@@ -27,6 +31,32 @@ _AUTHORITY_WEIGHT = {
 # genuinely on-intent hits above generic keyword matches, small enough that a
 # far weaker base hit can't leapfrog a much stronger one on mode alone.
 _MODE_BONUS = 0.3
+
+# Recency nudge for case_similarity: a writeup from this year gets up to this
+# much extra, decaying linearly to zero over five years. Techniques age — an
+# HTB box retired last year reflects current tooling far better than one from
+# a decade ago. Undated hits get nothing (most reference docs have no date).
+_RECENCY_BONUS = 0.1
+_RECENCY_HORIZON_YEARS = 5
+
+
+def _recency_bonus(hit: LexicalHit) -> float:
+    """Small recency nudge from the document's date, for case similarity."""
+    date = hit.metadata.get("date")
+    if not date:
+        return 0.0
+    try:
+        from datetime import date as _date
+
+        published = _date.fromisoformat(str(date)[:10])
+        age_years = (_date.today() - published).days / 365.25
+    except ValueError:
+        return 0.0
+    if age_years < 0:
+        age_years = 0.0  # clock skew / future-dated docs get the full bonus
+    if age_years >= _RECENCY_HORIZON_YEARS:
+        return 0.0
+    return _RECENCY_BONUS * (1.0 - age_years / _RECENCY_HORIZON_YEARS)
 
 
 def _authority_factor(authority: str) -> float:
@@ -56,6 +86,29 @@ def _keyword_overlap(query: str, hit: LexicalHit) -> float:
     return matched / len(tokens)
 
 
+def _technique_bias(hit: LexicalHit, techniques: list[str] | None) -> float:
+    """Bonus weight for hits whose title/heading names a requested technique.
+
+    ``techniques`` are resolved through the controlled vocabulary; a hit scores
+    the bias once per distinct named technique (capped so a laundry-list query
+    can't dominate the base evidence score). Body text is ignored, same as
+    :func:`_is_technique_hit` — a chunk that merely *mentions* a technique is
+    not necessarily *about* it.
+    """
+    if not techniques:
+        return 0.0
+    hay = (hit.title + " " + " ".join(hit.section_path)).lower()
+    named = 0
+    for t in techniques:
+        canonical = resolve_technique(t) or " ".join(t.lower().split())
+        if canonical in hay:
+            named += 1
+    # Full mode-bonus weight per named technique, capped at two: an explicit
+    # technique request is strong caller intent, but a laundry-list query
+    # still can't dominate the base evidence score.
+    return min(named, 2) * _MODE_BONUS
+
+
 def rerank(
     hits: Iterable[LexicalHit],
     *,
@@ -64,42 +117,60 @@ def rerank(
     per_document_cap: int = 2,
     platform: str | None = None,
     categories: list[str] | None = None,
+    techniques: list[str] | None = None,
     mode: str | None = None,
 ) -> list[LexicalHit]:
     """Score, filter, and diversify hits.
 
-    Final score = base_score * authority * (1 + keyword_overlap + metadata +
-    intent-mode bonus). Then apply a per-document cap so one page can't dominate
-    the result set.
+    Final score = base_score * authority * (1 + keyword_overlap + technique
+    bias + intent-mode bonus). Then apply a per-document cap so one page can't
+    dominate the result set.
+
+    ``platform`` and ``categories`` are *hard* filters: a hit whose document
+    doesn't carry the tag is excluded entirely, not merely down-ranked. The
+    lexical path already applies them in SQL (so non-matching hits don't waste
+    candidate-pool slots); applying them again here covers the semantic path,
+    whose vector search can't filter at query time.
+
+    ``techniques`` bias the ranking toward hits whose title/heading names one
+    of the requested techniques (resolved through the controlled vocabulary).
+    Unlike platform/categories this is a bias, not a filter — a strong hit
+    that demonstrates the technique without naming it in a heading still
+    surfaces.
 
     ``mode`` biases the ranking toward the caller's intent without excluding
-    anything: ``case_similarity`` favours hands-on writeups/case studies,
-    ``technique`` favours pages whose title/heading name a known technique. Both
-    are additive nudges layered on the same base evidence score, so a strong
-    generic hit still surfaces — it is merely outranked by an equally strong
-    on-intent one.
+    anything: ``case_similarity`` favours hands-on writeups/case studies (with
+    a small recency nudge for dated ones), ``technique`` favours pages whose
+    title/heading name a known technique. Both are additive nudges layered on
+    the same base evidence score, so a strong generic hit still surfaces — it
+    is merely outranked by an equally strong on-intent one.
     """
     platform = (platform or "").lower() or None
     cat_filter = {c.lower() for c in (categories or [])}
 
     scored: list[LexicalHit] = []
     for h in hits:
+        hit_cats = h.metadata.get("categories", [])
+        meta_cats = {str(c).lower() for c in hit_cats}
+
+        # Hard platform/category filter: skip non-matching hits outright.
+        if platform and platform not in meta_cats:
+            continue
+        if cat_filter and not (meta_cats & cat_filter):
+            continue
+
         base = h.score
         auth = _authority_factor(h.authority)
         overlap = _keyword_overlap(query, h)
         bonus = 0.25 * overlap
 
-        # Platform/category match bonus.
-        hit_cats = h.metadata.get("categories", [])
-        meta_cats = {str(c).lower() for c in hit_cats}
-        if platform and platform in meta_cats:
-            bonus += 0.15
-        if cat_filter and meta_cats & cat_filter:
-            bonus += 0.15
+        # Requested-technique bias.
+        bonus += _technique_bias(h, techniques)
 
         # Intent-mode bonus.
         if mode == "case_similarity" and is_writeup_category(list(hit_cats)):
             bonus += _MODE_BONUS
+            bonus += _recency_bonus(h)
         elif mode == "technique" and _is_technique_hit(h):
             bonus += _MODE_BONUS
 

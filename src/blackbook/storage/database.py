@@ -12,6 +12,7 @@ from __future__ import annotations
 import hashlib
 import json
 import sqlite3
+import threading
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Iterable, Iterator
@@ -46,6 +47,13 @@ class Database:
     def __init__(self, path: str | Path, echo: bool = False):
         self.path = str(path)
         self._echo = echo
+        # Serializes write sessions. Under the HTTP transport, FastMCP runs
+        # sync tools in a threadpool, so concurrent requests share this one
+        # connection; without the lock one request's rollback could abort
+        # another's in-flight session (commit/rollback is connection-wide).
+        # RLock so an accidental nested session() in the same thread can't
+        # self-deadlock; reads need no lock — WAL readers don't block the writer.
+        self._session_lock = threading.RLock()
         # check_same_thread=False so the MCP server thread can share it; the
         # server is single-writer by design.
         self.conn = sqlite3.connect(self.path, check_same_thread=False)
@@ -53,16 +61,14 @@ class Database:
         self.conn.execute("PRAGMA foreign_keys = ON")
         # Allow a short wait when another process is finishing a write. This is
         # important because the CLI ingestion process and stdio MCP server may
-        # legitimately share the same SQLite database.
+        # legitimately share the same SQLite database. WAL already lets readers
+        # and a single writer coexist; the timeout covers the brief window when
+        # another instance (e.g. a stdio server the editor spawned, or a
+        # concurrent CLI ingest) is mid-commit — including the idempotent
+        # migrate() write below — so a second instance can start against the
+        # same DB rather than crashing with "database is locked".
         self.conn.execute("PRAGMA busy_timeout = 10000")
         self.conn.execute("PRAGMA journal_mode = WAL")
-        # Wait (up to 5s) for a transient lock instead of failing immediately.
-        # WAL already lets readers and a single writer coexist; this covers the
-        # brief window when another instance (e.g. a stdio server the editor
-        # spawned, or a concurrent CLI ingest) is mid-commit — including the
-        # idempotent migrate() write below — so a second instance can start
-        # against the same DB rather than crashing with "database is locked".
-        self.conn.execute("PRAGMA busy_timeout = 5000")
         migrations.migrate(self.conn)
         # migrations.migrate writes schema metadata but intentionally does not
         # own the connection lifecycle. Commit it here so a long-lived MCP
@@ -74,12 +80,13 @@ class Database:
 
     @contextmanager
     def session(self) -> Iterator["Database"]:
-        try:
-            yield self
-            self.conn.commit()
-        except Exception:
-            self.conn.rollback()
-            raise
+        with self._session_lock:
+            try:
+                yield self
+                self.conn.commit()
+            except Exception:
+                self.conn.rollback()
+                raise
 
     def close(self) -> None:
         self.conn.close()
@@ -189,9 +196,12 @@ class Database:
     def iter_documents(self, source_ids: list[str] | None = None) -> Iterator[dict]:
         """Yield every document row, optionally scoped to ``source_ids``.
 
-        Used by the knowledge-graph builder to walk the corpus. Ordered by
-        ``doc_id`` for a stable, reproducible build.
+        ``None`` means every document; an empty list means none. Used by the
+        knowledge-graph builder to walk the corpus. Ordered by ``doc_id`` for
+        a stable, reproducible build.
         """
+        if source_ids is not None and not source_ids:
+            return
         if source_ids:
             placeholders = ",".join("?" for _ in source_ids)
             rows = self.conn.execute(
@@ -217,9 +227,33 @@ class Database:
 
     # -- chunks -----------------------------------------------------------
 
+    def _bump_embeddings_version(self) -> None:
+        """Invalidate in-process embedding caches (retrieval/semantic.py).
+
+        Bumped by every change to the chunk set or the embeddings themselves.
+        Semantic retrieval keys its matrix cache on this counter rather than
+        the embedding *count*, so a delete+add that leaves the count unchanged
+        still invalidates stale vectors.
+        """
+        self.conn.execute(
+            "INSERT INTO meta(key, value) VALUES('embeddings_version', '1') "
+            "ON CONFLICT(key) DO UPDATE SET "
+            "value = CAST(CAST(meta.value AS INTEGER) + 1 AS TEXT)"
+        )
+
+    def embeddings_version(self) -> int:
+        """Monotonic counter of chunk/embedding changes; starts at 0."""
+        row = self.conn.execute(
+            "SELECT value FROM meta WHERE key = 'embeddings_version'"
+        ).fetchone()
+        return int(row["value"]) if row else 0
+
     def replace_chunks(self, doc_id: int, chunks: Iterable[Chunk]) -> list[int]:
         """Replace all chunks for a document, returning the new chunk_ids."""
         self.conn.execute("DELETE FROM chunks WHERE doc_id = ?", (doc_id,))
+        # The DELETE cascade-removes this document's embeddings, so cached
+        # vector matrices are stale even before the new chunks are inserted.
+        self._bump_embeddings_version()
         ids: list[int] = []
         for c in chunks:
             cur = self.conn.execute(
@@ -265,19 +299,43 @@ class Database:
         source_ids: list[str] | None = None,
         limit: int = 50,
         offset: int = 0,
+        platform: str | None = None,
+        categories: list[str] | None = None,
     ) -> list[dict]:
         """FTS5 BM25 search over chunks.
 
         Returns chunk rows joined with document/source metadata and the FTS5
         ``bm25`` rank (lower is better; we negate it so higher is better).
+
+        ``platform`` and ``categories`` are *hard* filters over the document's
+        category tags (case-insensitive): a hit that doesn't carry the tag is
+        excluded, not merely down-ranked.
         """
         # The FTS5 MATCH must be the first WHERE condition (it binds `query`).
+        # ``source_ids is None`` means "no filter"; an empty list means "no
+        # sources are in scope" and matches nothing (never widens to all).
+        if source_ids is not None and not source_ids:
+            return []
         conditions = ["chunks_fts MATCH ?"]
         params: list[Any] = [query]
         if source_ids:
             placeholders = ",".join("?" for _ in source_ids)
             conditions.append(f"d.source_id IN ({placeholders})")
             params.extend(source_ids)
+        if platform:
+            conditions.append(
+                "EXISTS (SELECT 1 FROM json_each(d.categories) je "
+                "WHERE lower(je.value) = ?)"
+            )
+            params.append(platform.lower())
+        cats = [c.lower() for c in (categories or []) if c.strip()]
+        if cats:
+            placeholders = ",".join("?" for _ in cats)
+            conditions.append(
+                "EXISTS (SELECT 1 FROM json_each(d.categories) je "
+                f"WHERE lower(je.value) IN ({placeholders}))"
+            )
+            params.extend(cats)
         where = "WHERE " + " AND ".join(conditions)
         sql = f"""
             SELECT
@@ -334,6 +392,7 @@ class Database:
             """,
             (int(chunk_id), model, int(dim), sqlite3.Binary(vector)),
         )
+        self._bump_embeddings_version()
 
     def delete_embeddings(
         self, model: str | None = None, source_ids: list[str] | None = None
@@ -342,7 +401,10 @@ class Database:
 
         ``model`` scopes to a single model; ``source_ids`` scopes to chunks
         belonging to those sources. With neither, every embedding is removed.
+        An empty ``source_ids`` list matches nothing (never widens to all).
         """
+        if source_ids is not None and not source_ids:
+            return 0
         conditions: list[str] = []
         params: list[Any] = []
         if model is not None:
@@ -360,6 +422,8 @@ class Database:
             params.extend(source_ids)
         where = (" WHERE " + " AND ".join(conditions)) if conditions else ""
         cur = self.conn.execute(f"DELETE FROM chunk_embeddings{where}", params)
+        if cur.rowcount:
+            self._bump_embeddings_version()
         return int(cur.rowcount or 0)
 
     def embedding_count(self, model: str | None = None) -> int:
@@ -381,7 +445,10 @@ class Database:
 
         A chunk needs (re)embedding when it has no row in ``chunk_embeddings``
         for ``model``. Yields in batches to bound memory on large corpora.
+        An empty ``source_ids`` list matches nothing (never widens to all).
         """
+        if source_ids is not None and not source_ids:
+            return
         conditions = [
             "NOT EXISTS (SELECT 1 FROM chunk_embeddings e "
             "WHERE e.chunk_id = c.chunk_id AND e.model = ?)"
@@ -414,8 +481,11 @@ class Database:
 
         Returns parallel lists of ``chunk_ids`` and raw ``vector`` blobs. The
         caller decodes the blobs into a matrix. Kept deliberately dumb so the
-        storage layer has no numpy dependency.
+        storage layer has no numpy dependency. An empty ``source_ids`` list
+        matches nothing (never widens to all).
         """
+        if source_ids is not None and not source_ids:
+            return [], []
         conditions = ["e.model = ?"]
         params: list[Any] = [model]
         if source_ids:

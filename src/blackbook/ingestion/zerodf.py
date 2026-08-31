@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import logging
 import re
+import time
 from pathlib import Path
 from typing import Any, Iterator
 
@@ -34,6 +35,11 @@ log = logging.getLogger(__name__)
 
 _POST_URL_RE = re.compile(r"^/(\d{4})/(\d{2})/(\d{2})/([^/]+?)\.html$")
 _TITLE_PREFIX_RE = re.compile(r"^(HTB|PG|OSCP|VulnHub|TryHackMe|HackTheBox)\s*[:\-]\s*", re.I)
+
+# Safety net when ``max_files`` is unset: a runaway discovery (e.g. the post
+# URL pattern ever matching something unexpected) can't turn into an unbounded
+# crawl. 0xdf has ~650 posts, so a full corpus crawl still fits under this.
+_DEFAULT_MAX_FILES = 1000
 
 
 class ZeroDFAdapter(SourceAdapter):
@@ -66,13 +72,15 @@ class ZeroDFAdapter(SourceAdapter):
         index_html = self._get(self.base_url + "/")
         post_urls = self._extract_post_urls(index_html)
         max_files = self.config.max_files
-        if max_files is not None:
-            post_urls = post_urls[:max_files]
+        if max_files is None:
+            max_files = _DEFAULT_MAX_FILES
+        post_urls = post_urls[:max_files]
         log.info("0xdf: discovered %d posts", len(post_urls))
 
         # Record the URL list so iter_documents can walk it.
         (workdir / "index_urls.json").write_text("\n".join(post_urls))
 
+        delay = max(0.0, float(getattr(self.config, "request_delay", 0.5)))
         for url_path in post_urls:
             cache_path = self._cache_path(url_path)
             if cache_path.is_file() and not force:
@@ -82,6 +90,9 @@ class ZeroDFAdapter(SourceAdapter):
                 cache_path.write_text(html, encoding="utf-8")
             except Exception as e:
                 log.warning("0xdf: failed to fetch %s: %s", url_path, e)
+            # Be polite: a small pause between requests, not a burst.
+            if delay:
+                time.sleep(delay)
 
     def _get(self, url: str) -> str:
         assert self._client is not None

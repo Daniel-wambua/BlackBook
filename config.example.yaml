@@ -51,3 +51,17 @@ retrieval:
 
 logging:
   level: INFO
+
+server:
+  # HTTP transport settings (only used by `blackbook serve --http`; stdio
+  # ignores all of these).
+  host: 127.0.0.1
+  port: 8890
+  path: /mcp
+  # Optional bearer token. When set, every HTTP request must carry
+  #   Authorization: Bearer <token>
+  # or it is rejected with 401. Strongly recommended for any non-loopback bind.
+  auth_token: ""
+  # Refuse to start on a non-loopback address unless auth_token is set.
+  # Flip to false only if you understand the exposure.
+  require_auth_off_loopback: true
