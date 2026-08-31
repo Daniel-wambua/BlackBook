@@ -11,10 +11,11 @@
 [![MCP Tools](https://img.shields.io/badge/MCP%20tools-6-2ea043?style=flat-square)](#available-mcp-tools)
 [![Retrieval](https://img.shields.io/badge/retrieval-FTS5%20%2B%20Semantic-22b8f0?style=flat-square)](#retrieval-architecture)
 [![Sources](https://img.shields.io/badge/sources-HackTricks,%200xdf,%20PDFs-8957e5?style=flat-square)](#what-it-is)
-[![Tests](https://img.shields.io/badge/tests-149%20passing-3fb950?style=flat-square)](#testing)
+[![Tests](https://img.shields.io/badge/tests-221%20passing-3fb950?style=flat-square)](#testing)
 [![Status](https://img.shields.io/badge/status-alpha-f59e0b?style=flat-square)](#roadmap)
 [![License](https://img.shields.io/badge/license-MIT-8f5be8?style=flat-square)](LICENSE)
 [![Read only](https://img.shields.io/badge/read%20only-no%20execution-eab308?style=flat-square)](#security-model)
+[![CI](https://github.com/Daniel-wambua/BlackBook/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/Daniel-wambua/BlackBook/actions/workflows/ci.yml)
 
 **The read-only cybersecurity knowledge & research teammate: source-grounded search, exact citations, a knowledge graph, and investigation context, running alongside an execution MCP.**
 
@@ -262,7 +263,7 @@ blackbook case export MY-CASE   # export an investigation case as Markdown
 blackbook backup          # snapshot the knowledge base (VACUUM INTO)
 ```
 
-`platform` and `categories` are **hard filters** — results only come from
+`platform` and `categories` are **hard filters**: results only come from
 documents carrying the tag (e.g. `windows`/`linux`, `htb`, `Easy`/`Insane`).
 The MCP tools' `techniques` parameter resolves through the controlled
 vocabulary and biases results toward chunks whose heading names the technique;
