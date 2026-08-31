@@ -24,6 +24,8 @@ Registered adapters:
 | `payloads`, `hacker_recipes` | `GithubMarkdownAdapter` | git | Generic GitHub-markdown adapter, config-driven |
 | `gtfobins` | `GtfoBinsAdapter` | git | Extensionless YAML entries under `_gtfobins/`, one doc per binary |
 | `lolbas` | `LolbasAdapter` | git | `yml/<Category>/<Name>.yml` entries rendered to markdown |
+| `loobins` | `LooBinsAdapter` | git | macOS binaries; `LOOBins/<Name>.yml` with use cases + ATT&CK tactics |
+| `wadcoms` | `WadcomsAdapter` | git | Windows/AD cheat sheets; payload lives in markdown front matter |
 | `attack` | `MitreAttackAdapter` | git | MITRE ATT&CK enterprise STIX bundle; techniques by ATT&CK ID |
 
 Add a future source by subclassing `SourceAdapter` (or, for a GitHub repo,
@@ -57,7 +59,11 @@ GTFOBins and LOLBAS render their YAML corpora to structured markdown instead:
 one document per binary, every abuse function/command preserved with the
 contexts (sudo, suid, unprivileged) it works in. GTFOBins alias-only entries
 (`alias: mawk`) are folded into their target as alternate names rather than
-becoming near-empty documents.
+becoming near-empty documents. LOOBins does the same for macOS binaries
+(use cases with code, ATT&CK tactics as slugified categories, paths,
+detections), and WADComs parses markdown files whose entire payload is the
+YAML front matter (description, command, services, items, OS, references)
+with an empty body.
 
 ## MITRE ATT&CK
 

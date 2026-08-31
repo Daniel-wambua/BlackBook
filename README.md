@@ -2,16 +2,16 @@
 
 <img src="assets/blackbook-mcp-final-refined.png" alt="BlackBook MCP Logo" width="220" style="margin-bottom: 20px;"/>
 
-# BlackBook MCP v0.7.0
+# BlackBook MCP v0.7.1
 ### Source-Grounded Cybersecurity Knowledge & Research MCP
 
-[![Version](https://img.shields.io/badge/version-0.7.0-22d3ee?style=flat-square)](#)
+[![Version](https://img.shields.io/badge/version-0.7.1-22d3ee?style=flat-square)](#)
 [![Python](https://img.shields.io/badge/python-3.10%2B-3776AB?style=flat-square&logo=python&logoColor=white)](https://www.python.org/)
 [![Protocol](https://img.shields.io/badge/protocol-MCP-6b6bec?style=flat-square)](https://modelcontextprotocol.io/)
 [![MCP Tools](https://img.shields.io/badge/MCP%20tools-6-2ea043?style=flat-square)](#available-mcp-tools)
 [![Retrieval](https://img.shields.io/badge/retrieval-FTS5%20%2B%20Semantic-22b8f0?style=flat-square)](#retrieval-architecture)
 [![Sources](https://img.shields.io/badge/sources-HackTricks%2C%200xdf%2C%20ATT%26CK%2C%20GTFOBins%2C%20LOLBAS%2C%20PDFs%2C%20more-8957e5?style=flat-square)](#what-it-is)
-[![Tests](https://img.shields.io/badge/tests-242%20passing-3fb950?style=flat-square)](#testing)
+[![Tests](https://img.shields.io/badge/tests-250%20passing-3fb950?style=flat-square)](#testing)
 [![Status](https://img.shields.io/badge/status-alpha-f59e0b?style=flat-square)](#roadmap)
 [![License](https://img.shields.io/badge/license-MIT-8f5be8?style=flat-square)](LICENSE)
 [![Read only](https://img.shields.io/badge/read%20only-no%20execution-eab308?style=flat-square)](#security-model)
@@ -65,7 +65,7 @@ Claude is the orchestrator.
 
 ## Architecture Overview
 
-BlackBook MCP v0.7.0 is a source-grounded knowledge system: every query flows through
+BlackBook MCP v0.7.1 is a source-grounded knowledge system: every query flows through
 a hybrid retrieval facade, is enriched (never gated) by a knowledge graph, and returns
 results that resolve to exact, verifiable citations. Nothing is executed.
 
@@ -82,7 +82,7 @@ results that resolve to exact, verifiable citations. Nothing is executed.
   "nodeTextColor": "#fee2e2"
 }}}%%
 graph TD
-    A[AI Agent - Claude / Cursor / VS Code] -->|MCP Protocol over stdio| B[BlackBook MCP Server v0.7.0]
+    A[AI Agent - Claude / Cursor / VS Code] -->|MCP Protocol over stdio| B[BlackBook MCP Server v0.7.1]
 
     B --> C[Hybrid Retrieval Facade]
     B --> D[6 Knowledge Tools]
@@ -108,8 +108,8 @@ graph TD
     R --> T[0xdf Writeups]
     R --> U[Local PDFs]
     R --> X["MITRE ATT&CK"]
-    R --> Y[GTFOBins + LOLBAS]
-    R --> Z[Payloads + Hacker Recipes]
+    R --> Y[GTFOBins + LOLBAS + LOOBins]
+    R --> Z[Payloads + Recipes + WADComs]
 
     B --> V[Exact Citations and Provenance]
     V --> W[chunk_id resolves to verifiable excerpt]
@@ -157,9 +157,9 @@ source chunk.
 
 ## Features (current phase)
 
-* **Source-grounded search** across 8 built-in sources: HackTricks, 0xdf
-  writeups, MITRE ATT&CK, GTFOBins, LOLBAS, PayloadsAllTheThings, The Hacker
-  Recipes, and local PDFs
+* **Source-grounded search** across 10 built-in sources: HackTricks, 0xdf
+  writeups, MITRE ATT&CK, GTFOBins, LOLBAS, LOOBins, WADComs,
+  PayloadsAllTheThings, The Hacker Recipes, and local PDFs
 * **Exact, verifiable citations**: every reference resolves to real indexed text
 * **Structure-preserving chunking**: heading breadcrumbs and code blocks intact
 * **Hybrid retrieval facade** with reranking + source diversity: lexical (FTS5
@@ -243,6 +243,8 @@ blackbook ingest --source 0xdf         # HTB/CTF writeups
 blackbook ingest --source attack       # MITRE ATT&CK STIX bundle (~54 MB download)
 blackbook ingest --source gtfobins     # Unix binary abuse (YAML corpus)
 blackbook ingest --source lolbas       # Windows living-off-the-land binaries
+blackbook ingest --source loobins       # macOS living-off-the-land binaries
+blackbook ingest --source wadcoms       # offensive Windows/AD command cheat sheets
 blackbook ingest --source payloads     # PayloadsAllTheThings
 blackbook ingest --source hacker_recipes   # The Hacker Recipes
 blackbook ingest                        # all enabled sources
@@ -356,9 +358,9 @@ the banner and logs never corrupt an MCP client's stream.
 ██████╔╝███████╗██║  ██║╚██████╗██║  ██╗██████╔╝╚██████╔╝╚██████╔╝██║  ██╗
 ╚═════╝ ╚══════╝╚═╝  ╚═╝ ╚═════╝╚═╝  ╚═╝╚═════╝  ╚═════╝  ╚═════╝ ╚═╝  ╚═╝
   Source-grounded cybersecurity knowledge & research MCP
-  v0.7.0  ·  stdio  ·  read-only · no execution · every claim cited
-  corpus  8 sources · 3558 docs · 100985 chunks
-  graph   696 entities · 22257 relationships · 1 case
+  v0.7.1  ·  stdio  ·  read-only · no execution · every claim cited
+  corpus  10 sources · 3719 docs · 103360 chunks
+  graph   702 entities · 22338 relationships · 1 case
 ```
 
 In a real terminal the wordmark is gradient-lit (cyan→indigo, intentionally
@@ -513,8 +515,8 @@ generated PDF and skip if `reportlab` isn't installed.
 - [x] **Phase 6**: offline evaluation suite (`blackbook eval`), citation-integrity
   gate, FTS5 optimize on ingest, adversarial/hardening tests
 - [x] **Phase 7**: generic GitHub source adapter (tarball over HTTPS, config-driven)
-  with PayloadsAllTheThings, The Hacker Recipes, GTFOBins, LOLBAS; MITRE ATT&CK
-  STIX source with technique-dossier enrichment
+  with PayloadsAllTheThings, The Hacker Recipes, GTFOBins, LOLBAS, LOOBins,
+  WADComs; MITRE ATT&CK STIX source with technique-dossier enrichment
 
 ## License
 

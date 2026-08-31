@@ -9,6 +9,8 @@ from blackbook.ingestion.github_base import GithubTarballAdapter
 from blackbook.ingestion.github_md import GithubMarkdownAdapter
 from blackbook.ingestion.lolbas import LolbasAdapter
 from blackbook.ingestion.gtfobins import GtfoBinsAdapter
+from blackbook.ingestion.loobins import LooBinsAdapter
+from blackbook.ingestion.wadcoms import WadcomsAdapter
 from blackbook.ingestion.attack import MitreAttackAdapter
 
 ADAPTER_REGISTRY = {
@@ -19,6 +21,8 @@ ADAPTER_REGISTRY = {
     "hacker_recipes": GithubMarkdownAdapter,
     "gtfobins": GtfoBinsAdapter,
     "lolbas": LolbasAdapter,
+    "loobins": LooBinsAdapter,
+    "wadcoms": WadcomsAdapter,
     "attack": MitreAttackAdapter,
 }
 
@@ -52,6 +56,8 @@ __all__ = [
     "GithubMarkdownAdapter",
     "LolbasAdapter",
     "GtfoBinsAdapter",
+    "LooBinsAdapter",
+    "WadcomsAdapter",
     "MitreAttackAdapter",
     "adapter_for",
 ]

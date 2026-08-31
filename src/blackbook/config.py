@@ -208,6 +208,32 @@ def _default_sources() -> list[SourceConfig]:
             ),
             ref="master",
         ),
+        # LOOBins: macOS binaries, YAML corpus (fills the macOS gap beside
+        # LOLBAS/Windows and GTFOBins/Unix).
+        SourceConfig(
+            id="loobins",
+            name="LOOBins",
+            enabled=True,
+            type="git",
+            authority="trusted",
+            url="https://github.com/infosecB/LOOBins.git",
+            ref="main",
+            content_root="LOOBins",
+            site_url="https://loobins.io",
+        ),
+        # WADComs: offensive Windows/AD command cheat sheets; the whole
+        # payload lives in markdown front matter.
+        SourceConfig(
+            id="wadcoms",
+            name="WADComs",
+            enabled=True,
+            type="git",
+            authority="trusted",
+            url="https://github.com/WADComs/WADComs.github.io.git",
+            ref="master",
+            content_root="_wadcoms",
+            site_url="https://wadcoms.github.io",
+        ),
     ]
 
 

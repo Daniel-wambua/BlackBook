@@ -81,6 +81,28 @@ sources:
     ref: master
     site_url: https://lolbas-project.github.io
 
+  # macOS binaries ("Living Off the Orchard"); YAML corpus.
+  - id: loobins
+    name: LOOBins
+    enabled: true
+    type: git
+    authority: trusted
+    url: https://github.com/infosecB/LOOBins.git
+    ref: main
+    content_root: LOOBins
+    site_url: https://loobins.io
+
+  # Offensive Windows/AD command cheat sheets; content lives in front matter.
+  - id: wadcoms
+    name: WADComs
+    enabled: true
+    type: git
+    authority: trusted
+    url: https://github.com/WADComs/WADComs.github.io.git
+    ref: master
+    content_root: _wadcoms
+    site_url: https://wadcoms.github.io
+
   # MITRE ATT&CK enterprise STIX bundle (official; ~54 MB download).
   # Ingesting it lets knowledge_technique return official tactics, platforms,
   # and an attack.mitre.org link alongside the cited corpus references.
