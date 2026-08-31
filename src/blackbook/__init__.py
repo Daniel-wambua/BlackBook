@@ -10,6 +10,6 @@ execute commands, scan hosts, or exploit targets. Execution belongs to a
 separate MCP (e.g. HexStrike); BlackBook informs the reasoning loop.
 """
 
-__version__ = "0.6.0"
+__version__ = "0.7.0"
 
 __all__ = ["__version__"]

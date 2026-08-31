@@ -37,6 +37,60 @@ sources:
     directory: ~/knowledge/pdfs
     include_glob: "**/*.pdf"
 
+  # GitHub sources are fetched as tarballs over HTTPS (no git/shell execution)
+  # and are configuration-driven. Extra keys:
+  #   ref           branch to track (default master)
+  #   include_glob  which files to index (default **/*.md)
+  #   content_root  restrict indexing to a repo subtree
+  #   site_url      map citations to the published site instead of a GitHub
+  #                 blob URL
+  - id: payloads
+    name: PayloadsAllTheThings
+    enabled: true
+    type: git
+    authority: trusted
+    url: https://github.com/swisskyrepo/PayloadsAllTheThings.git
+    ref: master
+
+  - id: hacker_recipes
+    name: The Hacker Recipes
+    enabled: true
+    type: git
+    authority: trusted
+    url: https://github.com/The-Hacker-Recipes/The-Hacker-Recipes.git
+    ref: main
+    content_root: docs
+    site_url: https://thehacker.recipes
+
+  - id: gtfobins
+    name: GTFOBins
+    enabled: true
+    type: git
+    authority: trusted
+    url: https://github.com/GTFOBins/GTFOBins.github.io.git
+    ref: master
+    content_root: _gtfobins
+    site_url: https://gtfobins.github.io
+
+  - id: lolbas
+    name: LOLBAS
+    enabled: true
+    type: git
+    authority: trusted
+    url: https://github.com/LOLBAS-Project/LOLBAS.git
+    ref: master
+    site_url: https://lolbas-project.github.io
+
+  # MITRE ATT&CK enterprise STIX bundle (official; ~54 MB download).
+  # Ingesting it lets knowledge_technique return official tactics, platforms,
+  # and an attack.mitre.org link alongside the cited corpus references.
+  - id: attack
+    name: MITRE ATT&CK
+    enabled: true
+    type: git
+    authority: official
+    url: https://raw.githubusercontent.com/mitre-attack/attack-stix-data/master/enterprise-attack/enterprise-attack.json
+
 embeddings:
   enabled: false               # Phase 3: semantic/vector search
   model: sentence-transformers/all-MiniLM-L6-v2

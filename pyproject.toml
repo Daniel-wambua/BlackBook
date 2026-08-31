@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "blackbook-mcp"
-version = "0.6.0"
+version = "0.7.0"
 description = "BlackBook MCP — a source-grounded cybersecurity knowledge & research MCP server"
 readme = "README.md"
 license = { text = "MIT" }

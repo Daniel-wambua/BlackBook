@@ -21,9 +21,57 @@ Registered adapters:
 | `hacktricks` | `HackTricksAdapter` | git | Tarball over HTTPS (no shell/git exec) |
 | `0xdf` | `ZeroDFAdapter` | website | Jekyll blog; rich structured metadata |
 | `local_pdfs` | `PDFAdapter` | filesystem | Font-aware heading/code detection, per-page citations |
+| `payloads`, `hacker_recipes` | `GithubMarkdownAdapter` | git | Generic GitHub-markdown adapter, config-driven |
+| `gtfobins` | `GtfoBinsAdapter` | git | Extensionless YAML entries under `_gtfobins/`, one doc per binary |
+| `lolbas` | `LolbasAdapter` | git | `yml/<Category>/<Name>.yml` entries rendered to markdown |
+| `attack` | `MitreAttackAdapter` | git | MITRE ATT&CK enterprise STIX bundle; techniques by ATT&CK ID |
 
-Add a future source by subclassing `SourceAdapter` and registering it in
-`blackbook/ingestion/__init__.py:ADAPTER_REGISTRY`.
+Add a future source by subclassing `SourceAdapter` (or, for a GitHub repo,
+`GithubTarballAdapter`) and registering it in
+`blackbook/ingestion/__init__.py:ADAPTER_REGISTRY`. Unregistered `git`-type
+sources fall back to the generic GitHub-markdown adapter, and `filesystem`
+sources to the PDF adapter.
+
+## GitHub sources (generic)
+
+All GitHub-backed sources share `GithubTarballAdapter`'s fetch mechanics:
+
+* Downloaded as a **tarball over HTTPS** (`codeload.github.com`), never via
+  shell or git execution.
+* Change detection queries the latest commit SHA and skips re-download when
+  current.
+* Tarball extraction is hardened against zip-slip/path traversal and skips
+  device files and links.
+
+Parsing is per-source. `GithubMarkdownAdapter` walks markdown files and is
+configuration-driven, so most new markdown sources need no code:
+
+* `ref` — branch to track.
+* `include_glob` — which files to index (default `**/*.md`).
+* `content_root` — restrict indexing to a repo subtree (and strip it from
+  category breadcrumbs).
+* `site_url` — map citations to the published site (`/index` collapses to the
+  directory); without it, citations point at the GitHub blob URL.
+
+GTFOBins and LOLBAS render their YAML corpora to structured markdown instead:
+one document per binary, every abuse function/command preserved with the
+contexts (sudo, suid, unprivileged) it works in. GTFOBins alias-only entries
+(`alias: mawk`) are folded into their target as alternate names rather than
+becoming near-empty documents.
+
+## MITRE ATT&CK
+
+* The enterprise-attack STIX bundle is downloaded from the official
+  `mitre-attack/attack-stix-data` repository (~54 MB) and cached under
+  `raw/attack/bundle.json`; the file's latest commit SHA is the no-op marker.
+* Each `attack-pattern` object becomes one document whose `external_id` is the
+  ATT&CK technique ID (e.g. `T1558.003`). Revoked and deprecated objects are
+  skipped.
+* Platforms land as lowercase category tags and tactics as dashed slugs, so
+  `platform`/`categories` hard filters work against ATT&CK material.
+* With the source ingested, `knowledge_technique` resolves its term to an
+  ATT&CK ID and enriches the dossier with the official tactics, platforms, and
+  attack.mitre.org link, citing the ATT&CK record first.
 
 ## HackTricks
 

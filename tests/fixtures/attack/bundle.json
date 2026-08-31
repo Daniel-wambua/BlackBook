@@ -1,0 +1,80 @@
+{
+  "type": "bundle",
+  "id": "bundle--test",
+  "spec_version": "2.1",
+  "objects": [
+    {
+      "type": "attack-pattern",
+      "id": "attack-pattern--1",
+      "name": "Steal or Forge Kerberos Tickets: Kerberoasting",
+      "description": "Adversaries may abuse a valid Kerberos ticket-granting ticket (TGT) to request a service ticket from the Kerberos Key Distribution Center (KDC).",
+      "kill_chain_phases": [
+        {"kill_chain_name": "mitre-attack", "phase_name": "credential-access"}
+      ],
+      "x_mitre_platforms": ["Windows", "IaaS"],
+      "x_mitre_detection": "Monitor for large numbers of service ticket requests.",
+      "x_mitre_is_subtechnique": true,
+      "modified": "2025-04-02T00:00:00.000Z",
+      "external_references": [
+        {
+          "source_name": "mitre-attack",
+          "external_id": "T1558.003",
+          "url": "https://attack.mitre.org/techniques/T1558/003/"
+        }
+      ]
+    },
+    {
+      "type": "attack-pattern",
+      "id": "attack-pattern--2",
+      "name": "Revoked Technique",
+      "description": "This technique was revoked and must never be cited.",
+      "revoked": true,
+      "external_references": [
+        {"source_name": "mitre-attack", "external_id": "T9999"}
+      ]
+    },
+    {
+      "type": "attack-pattern",
+      "id": "attack-pattern--3",
+      "name": "Deprecated Technique",
+      "description": "This technique is deprecated and must never be cited.",
+      "x_mitre_deprecated": true,
+      "external_references": [
+        {"source_name": "mitre-attack", "external_id": "T9998"}
+      ]
+    },
+    {
+      "type": "attack-pattern",
+      "id": "attack-pattern--4",
+      "name": "No ATT&CK ID",
+      "description": "No mitre-attack external reference: not citable by ID.",
+      "external_references": [
+        {"source_name": "capec", "external_id": "CAPEC-1"}
+      ]
+    },
+    {
+      "type": "course-of-action",
+      "id": "course-of-action--1",
+      "name": "Not an attack pattern",
+      "description": "Skipped: only attack-patterns are ingested."
+    },
+    {
+      "type": "attack-pattern",
+      "id": "attack-pattern--5",
+      "name": "Exploit Public-Facing Application",
+      "description": "Adversaries may attempt to exploit a weakness of an internet-facing host or service.",
+      "kill_chain_phases": [
+        {"kill_chain_name": "mitre-attack", "phase_name": "initial-access"}
+      ],
+      "x_mitre_platforms": ["Windows", "Linux"],
+      "modified": "2025-03-01T00:00:00.000Z",
+      "external_references": [
+        {
+          "source_name": "mitre-attack",
+          "external_id": "T1190",
+          "url": "https://attack.mitre.org/techniques/T1190/"
+        }
+      ]
+    }
+  ]
+}

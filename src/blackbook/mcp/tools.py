@@ -58,6 +58,20 @@ from blackbook.storage.models import Case, CaseObservation
 log = logging.getLogger(__name__)
 
 
+def _load_doc_metadata(doc: dict) -> dict:
+    """Parse a document row's stored metadata blob, tolerating garbage."""
+    raw = doc.get("metadata")
+    if isinstance(raw, dict):
+        return raw
+    if isinstance(raw, str) and raw.strip():
+        try:
+            parsed = json.loads(raw)
+            return parsed if isinstance(parsed, dict) else {}
+        except ValueError:
+            return {}
+    return {}
+
+
 class KnowledgeTools:
     """Holds shared state (db, settings, retriever) for the MCP tools."""
 
@@ -300,6 +314,55 @@ class KnowledgeTools:
         )
         references = [self._to_item(r, "standard") for r in results]
 
+        # MITRE ATT&CK enrichment: when the technique has an ATT&CK ID and
+        # the ATT&CK source is indexed, ground the dossier in the real
+        # technique record (tactics, platforms, official URL + a citation).
+        aid = attack_id(term)
+        tactics: list[str] = []
+        platforms: list[str] = []
+        mitre_url = None
+        mitre_ref = None
+        if aid:
+            doc = self.db.get_document_by_external("attack", aid)
+            if doc:
+                meta = _load_doc_metadata(doc)
+                tactics = list(meta.get("tactics") or [])
+                platforms = list(meta.get("platforms") or [])
+                mitre_url = doc.get("url")
+                chunks = self.db.document_chunks(int(doc["doc_id"]))
+                if chunks:
+                    first = chunks[0]
+                    section = first.get("section_path") or "[]"
+                    if isinstance(section, str):
+                        try:
+                            section = json.loads(section)
+                        except ValueError:
+                            section = []
+                    mitre_ref = SearchResultItem(
+                        title=doc.get("title") or term,
+                        source="attack",
+                        source_name="MITRE ATT&CK",
+                        authority="official",
+                        relevance=1.0,
+                        snippet=first["text"][:400],
+                        ref=SourceRef(
+                            chunk_id=first["chunk_id"],
+                            doc_id=int(doc["doc_id"]),
+                            title=doc.get("title") or term,
+                            source="attack",
+                            source_name="MITRE ATT&CK",
+                            authority="official",
+                            url=mitre_url,
+                            path=doc.get("path"),
+                            page=None,
+                            section_path=section,
+                        ),
+                    )
+        if mitre_ref is not None and not any(
+            r.ref.source == "attack" for r in references
+        ):
+            references.insert(0, mitre_ref)
+
         note = ""
         if not in_graph and not references:
             note = (
@@ -313,7 +376,10 @@ class KnowledgeTools:
             technique=term,
             resolved=canonical is not None,
             in_graph=in_graph,
-            attack_id=attack_id(term),
+            attack_id=aid,
+            tactics=tactics,
+            platforms=platforms,
+            mitre_url=mitre_url,
             documented_by=documented_by,
             related_tools=related_tools,
             related_services=related_services,

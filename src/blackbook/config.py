@@ -48,10 +48,17 @@ class SourceConfig(BaseModel):
     # git / website sources
     url: str | None = None
     ref: str | None = None  # git branch/tag/commit
+    # Base URL of the published site for GitHub-markdown sources. When set,
+    # page URLs map under it; when unset, URLs point at the GitHub blob page.
+    site_url: str | None = None
+    # Ingest only this repo subtree (repo-relative, e.g. "docs"); "" = all.
+    content_root: str = ""
 
     # filesystem sources
     directory: str | None = None
-    include_glob: str = "**/*.pdf"  # for filesystem sources
+    # "" = adapter default ("**/*.pdf" for filesystem, "**/*.md" for
+    # GitHub-markdown sources)
+    include_glob: str = ""
 
     # Fetch limits (security / cost control)
     max_files: int | None = None
@@ -142,6 +149,64 @@ def _default_sources() -> list[SourceConfig]:
             type="filesystem",
             authority="user",
             directory="~/knowledge/pdfs",
+        ),
+        # GitHub markdown sources (GithubMarkdownAdapter): repo + branch +
+        # optional content subtree and published-site mapping, all config.
+        SourceConfig(
+            id="payloads",
+            name="PayloadsAllTheThings",
+            enabled=True,
+            type="git",
+            authority="trusted",
+            url="https://github.com/swisskyrepo/PayloadsAllTheThings.git",
+            ref="master",
+        ),
+        SourceConfig(
+            id="hacker_recipes",
+            name="The Hacker Recipes",
+            enabled=True,
+            type="git",
+            authority="trusted",
+            url="https://github.com/The-Hacker-Recipes/The-Hacker-Recipes.git",
+            ref="main",
+            content_root="docs",
+            site_url="https://thehacker.recipes",
+        ),
+        SourceConfig(
+            id="gtfobins",
+            name="GTFOBins",
+            enabled=True,
+            type="git",
+            authority="trusted",
+            url="https://github.com/GTFOBins/GTFOBins.github.io.git",
+            ref="master",
+            content_root="_gtfobins",
+            site_url="https://gtfobins.github.io",
+        ),
+        # LOLBAS is YAML, not markdown: its own adapter over the same
+        # tarball-fetching base.
+        SourceConfig(
+            id="lolbas",
+            name="LOLBAS",
+            enabled=True,
+            type="git",
+            authority="trusted",
+            url="https://github.com/LOLBAS-Project/LOLBAS.git",
+            ref="master",
+            site_url="https://lolbas-project.github.io",
+        ),
+        # MITRE ATT&CK STIX data (attack-pattern objects -> documents).
+        SourceConfig(
+            id="attack",
+            name="MITRE ATT&CK",
+            enabled=True,
+            type="git",
+            authority="official",
+            url=(
+                "https://raw.githubusercontent.com/mitre-attack/attack-stix-data/"
+                "master/enterprise-attack/enterprise-attack.json"
+            ),
+            ref="master",
         ),
     ]
 

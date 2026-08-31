@@ -2,16 +2,16 @@
 
 <img src="assets/blackbook-mcp-final-refined.png" alt="BlackBook MCP Logo" width="220" style="margin-bottom: 20px;"/>
 
-# BlackBook MCP v0.6.0
+# BlackBook MCP v0.7.0
 ### Source-Grounded Cybersecurity Knowledge & Research MCP
 
-[![Version](https://img.shields.io/badge/version-0.6.0-22d3ee?style=flat-square)](#)
+[![Version](https://img.shields.io/badge/version-0.7.0-22d3ee?style=flat-square)](#)
 [![Python](https://img.shields.io/badge/python-3.10%2B-3776AB?style=flat-square&logo=python&logoColor=white)](https://www.python.org/)
 [![Protocol](https://img.shields.io/badge/protocol-MCP-6b6bec?style=flat-square)](https://modelcontextprotocol.io/)
 [![MCP Tools](https://img.shields.io/badge/MCP%20tools-6-2ea043?style=flat-square)](#available-mcp-tools)
 [![Retrieval](https://img.shields.io/badge/retrieval-FTS5%20%2B%20Semantic-22b8f0?style=flat-square)](#retrieval-architecture)
-[![Sources](https://img.shields.io/badge/sources-HackTricks,%200xdf,%20PDFs-8957e5?style=flat-square)](#what-it-is)
-[![Tests](https://img.shields.io/badge/tests-221%20passing-3fb950?style=flat-square)](#testing)
+[![Sources](https://img.shields.io/badge/sources-HackTricks%2C%200xdf%2C%20ATT%26CK%2C%20GTFOBins%2C%20LOLBAS%2C%20PDFs%2C%20more-8957e5?style=flat-square)](#what-it-is)
+[![Tests](https://img.shields.io/badge/tests-242%20passing-3fb950?style=flat-square)](#testing)
 [![Status](https://img.shields.io/badge/status-alpha-f59e0b?style=flat-square)](#roadmap)
 [![License](https://img.shields.io/badge/license-MIT-8f5be8?style=flat-square)](LICENSE)
 [![Read only](https://img.shields.io/badge/read%20only-no%20execution-eab308?style=flat-square)](#security-model)
@@ -41,7 +41,7 @@ or any MCP-compatible client.
           |                         |
    +------+------+         +--------+--------+
    |      |      |         |        |        |
-  Nmap  ffuf  nuclei   HackTricks  0xdf   PDFs
+  Nmap  ffuf  nuclei   HackTricks  0xdf   ATT&CK
    |      |      |         |        |        |
    +------+------+         +--------+--------+
           |                         |
@@ -65,7 +65,7 @@ Claude is the orchestrator.
 
 ## Architecture Overview
 
-BlackBook MCP v0.6.0 is a source-grounded knowledge system: every query flows through
+BlackBook MCP v0.7.0 is a source-grounded knowledge system: every query flows through
 a hybrid retrieval facade, is enriched (never gated) by a knowledge graph, and returns
 results that resolve to exact, verifiable citations. Nothing is executed.
 
@@ -82,7 +82,7 @@ results that resolve to exact, verifiable citations. Nothing is executed.
   "nodeTextColor": "#fee2e2"
 }}}%%
 graph TD
-    A[AI Agent - Claude / Cursor / VS Code] -->|MCP Protocol over stdio| B[BlackBook MCP Server v0.6.0]
+    A[AI Agent - Claude / Cursor / VS Code] -->|MCP Protocol over stdio| B[BlackBook MCP Server v0.7.0]
 
     B --> C[Hybrid Retrieval Facade]
     B --> D[6 Knowledge Tools]
@@ -107,6 +107,9 @@ graph TD
     R --> S[HackTricks]
     R --> T[0xdf Writeups]
     R --> U[Local PDFs]
+    R --> X["MITRE ATT&CK"]
+    R --> Y[GTFOBins + LOLBAS]
+    R --> Z[Payloads + Hacker Recipes]
 
     B --> V[Exact Citations and Provenance]
     V --> W[chunk_id resolves to verifiable excerpt]
@@ -154,7 +157,9 @@ source chunk.
 
 ## Features (current phase)
 
-* **Source-grounded search** across HackTricks, 0xdf writeups, and local PDFs
+* **Source-grounded search** across 8 built-in sources: HackTricks, 0xdf
+  writeups, MITRE ATT&CK, GTFOBins, LOLBAS, PayloadsAllTheThings, The Hacker
+  Recipes, and local PDFs
 * **Exact, verifiable citations**: every reference resolves to real indexed text
 * **Structure-preserving chunking**: heading breadcrumbs and code blocks intact
 * **Hybrid retrieval facade** with reranking + source diversity: lexical (FTS5
@@ -213,6 +218,8 @@ sources:
     enabled: true
     directory: ~/knowledge/pdfs
     authority: user                # NOT assumed authoritative
+  - id: attack                     # MITRE ATT&CK STIX bundle (authority: official)
+    enabled: true
 embeddings:
   enabled: false                   # set true + install [semantic] for local semantic search
   model: sentence-transformers/all-MiniLM-L6-v2
@@ -222,11 +229,22 @@ retrieval:
   per_document_cap: 2              # source diversity
 ```
 
+Eight sources are registered by default (run `blackbook sources` to list them).
+GitHub-backed sources accept a few extra keys: `ref` (branch), `include_glob`
+(which files to index), `content_root` (restrict to a subtree), and `site_url`
+(map citations to the published site instead of the GitHub blob URL). See
+`config.example.yaml`.
+
 ## Initial ingestion
 
 ```bash
 blackbook ingest --source hacktricks   # markdown book (tarball over HTTPS)
 blackbook ingest --source 0xdf         # HTB/CTF writeups
+blackbook ingest --source attack       # MITRE ATT&CK STIX bundle (~54 MB download)
+blackbook ingest --source gtfobins     # Unix binary abuse (YAML corpus)
+blackbook ingest --source lolbas       # Windows living-off-the-land binaries
+blackbook ingest --source payloads     # PayloadsAllTheThings
+blackbook ingest --source hacker_recipes   # The Hacker Recipes
 blackbook ingest                        # all enabled sources
 
 # bound the size during a first run:
@@ -338,9 +356,9 @@ the banner and logs never corrupt an MCP client's stream.
 ██████╔╝███████╗██║  ██║╚██████╗██║  ██╗██████╔╝╚██████╔╝╚██████╔╝██║  ██╗
 ╚═════╝ ╚══════╝╚═╝  ╚═╝ ╚═════╝╚═╝  ╚═╝╚═════╝  ╚═════╝  ╚═════╝ ╚═╝  ╚═╝
   Source-grounded cybersecurity knowledge & research MCP
-  v0.6.0  ·  stdio  ·  read-only · no execution · every claim cited
-  corpus  3 sources · 1204 docs · 18630 chunks · 18630 embeddings
-  graph   642 entities · 1508 relationships · 2 cases
+  v0.7.0  ·  stdio  ·  read-only · no execution · every claim cited
+  corpus  8 sources · 3558 docs · 100985 chunks
+  graph   696 entities · 22257 relationships · 1 case
 ```
 
 In a real terminal the wordmark is gradient-lit (cyan→indigo, intentionally
@@ -366,7 +384,7 @@ files stay clean.
 |------|--------|---------|
 | `knowledge_search` | ✅ | Source-grounded search with provenance-tagged results |
 | `knowledge_source` | ✅ | Resolve a reference to the exact supporting excerpt |
-| `knowledge_technique` | ✅ | Structured technique dossier (graph-enriched, always cited) |
+| `knowledge_technique` | ✅ | Structured technique dossier (graph-enriched, always cited; official ATT&CK tactics/platforms/link when mapped) |
 | `knowledge_case_search` | ✅ | Similar-case (writeup) retrieval, techniques annotated |
 | `knowledge_research` | ✅ | Observation-driven, source-grounded research packets |
 | `knowledge_context` | ✅ | Local investigation state (cases + observations) |
@@ -475,8 +493,9 @@ docs/                  architecture, ingestion, retrieval, mcp, security
 python -m pytest tests -q
 ```
 
-Tests cover chunking, storage/FTS5 sync, HackTricks & 0xdf parsing (offline
-fixtures), retrieval & reranking, semantic embeddings & hybrid merge, MCP tools,
+Tests cover chunking, storage/FTS5 sync, every source adapter (offline
+fixtures: HackTricks, 0xdf, GitHub markdown, GTFOBins, LOLBAS, ATT&CK STIX),
+retrieval & reranking, semantic embeddings & hybrid merge, MCP tools,
 provenance round-trips, and path safety. Semantic tests use a deterministic
 model-free embedder so they run offline with no model download; one real-model
 test skips cleanly when the `[semantic]` extra isn't installed. PDF tests use a
@@ -493,6 +512,9 @@ generated PDF and skip if `reportlab` isn't installed.
   `knowledge_context` (local investigation state)
 - [x] **Phase 6**: offline evaluation suite (`blackbook eval`), citation-integrity
   gate, FTS5 optimize on ingest, adversarial/hardening tests
+- [x] **Phase 7**: generic GitHub source adapter (tarball over HTTPS, config-driven)
+  with PayloadsAllTheThings, The Hacker Recipes, GTFOBins, LOLBAS; MITRE ATT&CK
+  STIX source with technique-dossier enrichment
 
 ## License
 

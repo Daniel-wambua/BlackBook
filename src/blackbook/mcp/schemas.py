@@ -125,6 +125,11 @@ class TechniqueOutput(BaseModel):
     resolved: bool            # True when it mapped to a controlled vocabulary term
     in_graph: bool            # True when a graph entity exists for it
     attack_id: str | None = None  # curated MITRE ATT&CK ID, None when unmapped
+    # Filled from the indexed MITRE ATT&CK source when the technique's
+    # document exists there; empty otherwise.
+    tactics: list[str] = Field(default_factory=list)
+    platforms: list[str] = Field(default_factory=list)
+    mitre_url: str | None = None
     documented_by: list[GraphRef] = Field(default_factory=list)   # sources
     related_tools: list[GraphRef] = Field(default_factory=list)
     related_services: list[GraphRef] = Field(default_factory=list)

@@ -73,6 +73,11 @@ class SourceAdapter(ABC):
     def __init__(self, config: SourceConfig, raw_dir: str | None = None):
         self.config = config
         self.raw_dir = raw_dir
+        # A class-pinned source_id (back-compat for the original adapters)
+        # wins; every other adapter takes its identity from the config so
+        # one adapter class can serve many sources.
+        if not type(self).source_id:
+            self.source_id = config.id
 
     # -- fetching ----------------------------------------------------------
 
