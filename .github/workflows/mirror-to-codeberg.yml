@@ -1,0 +1,32 @@
+name: Mirror to Codeberg
+
+# Keeps codeberg.org/Daniel-wambua/BlackBook in sync with this repo.
+# Triggered by every push (branches and tags alike); the mirror run clones
+# this repository fresh each time, so deletions propagate too.
+#
+# Requires one repository secret (GitHub → Settings → Secrets and variables
+# → Actions):
+#   CODEBERG_TOKEN — a Codeberg access token with repository Read+Write
+#   (Codeberg → Settings → Applications → Generate New Token)
+
+on:
+  push:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  mirror:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Push mirror to Codeberg
+        env:
+          CODEBERG_TOKEN: ${{ secrets.CODEBERG_TOKEN }}
+        run: |
+          set -euo pipefail
+          git clone --mirror "https://github.com/${GITHUB_REPOSITORY}.git" mirror.git
+          cd mirror.git
+          # GitHub's pull-request refs are GitHub plumbing; don't mirror them.
+          git for-each-ref --format='delete %(refname)' refs/pull | git update-ref --stdin
+          git push --mirror "https://Daniel-wambua:${CODEBERG_TOKEN}@codeberg.org/Daniel-wambua/BlackBook.git"
