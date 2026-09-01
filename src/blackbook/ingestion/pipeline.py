@@ -13,6 +13,7 @@ The pipeline never fetches or parses itself — that is the adapter's job.
 
 from __future__ import annotations
 
+import json
 import logging
 from dataclasses import dataclass, field
 
@@ -94,6 +95,11 @@ class IngestionPipeline:
         doc_hash = content_hash(parsed.text)
         existing = self.db.get_document_by_external(adapter.source_id, parsed.external_id)
         if existing and existing.get("content_hash") == doc_hash:
+            # Content unchanged, but citation metadata can still drift —
+            # e.g. a source re-publishes under new permalinks, or a config
+            # fix changes the URL mapping. Refresh it in place so stored
+            # citations self-heal without re-chunking (or re-embedding).
+            self._refresh_citation_if_drifted(adapter.source_id, parsed, existing)
             return "unchanged"
 
         # Prepare chunks: adapter-provided, else generic markdown chunking.
@@ -137,3 +143,31 @@ class IngestionPipeline:
                 )
             self.db.replace_chunks(doc_id, chunk_rows)
         return len(chunk_rows)
+
+    def _refresh_citation_if_drifted(
+        self, source_id: str, parsed: ParsedDocument, existing: dict
+    ) -> None:
+        """Update citation fields on an unchanged document when they differ
+        from what the adapter now produces. No-op when everything matches."""
+        try:
+            old_categories = json.loads(existing.get("categories") or "[]")
+        except Exception:
+            old_categories = None
+        if (
+            existing.get("url") == parsed.url
+            and existing.get("title") == parsed.title
+            and old_categories == (parsed.categories or [])
+        ):
+            return
+        with self.db.session():
+            self.db.refresh_document_citation(
+                source_id,
+                parsed.external_id,
+                title=parsed.title,
+                url=parsed.url,
+                path=parsed.path,
+                categories=parsed.categories or [],
+            )
+        log.info(
+            "[%s] refreshed citation metadata for %s", source_id, parsed.external_id
+        )

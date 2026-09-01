@@ -16,9 +16,10 @@ class HackTricksAdapter(GithubMarkdownAdapter):
 
     source_id = "hacktricks"
 
-    def _source_url(self, root, path) -> str:
+    def _source_url(self, root, path, front_matter: str = "") -> str:
         # The book is served at book.hacktricks.xyz with the repository's
-        # directory structure mirrored and ``.md`` dropped.
+        # directory structure mirrored and ``.md`` dropped. HackTricks pages
+        # carry no Jekyll permalinks, so the front matter is unused here.
         rel = self._rel_to_repo(root, path)
         rel_str = str(rel).replace("\\", "/")
         if rel_str.endswith(".md"):

@@ -9,10 +9,16 @@ Per-source behaviour is configuration, not code:
 
 * ``url`` + ``ref``            which repo/branch to fetch
 * ``include_glob``             which files to parse (default ``**/*.md``)
+* ``exclude_glob``             comma-separated fnmatch patterns (repo-relative,
+  ``/``-separated) for files to skip — repo plumbing, link indexes, templates
 * ``content_root``             ingest only this repo subtree (default: all)
 * ``site_url``                 base URL of the published site; page URLs are
   mapped under it. When unset, page URLs point at the GitHub blob page,
   which always exists even for repos with no separate website.
+
+Jekyll repos can carry a ``permalink`` in the page's front matter; when
+``site_url`` is set, that permalink wins over the path-derived URL (it is the
+author's canonical link, and may differ in case or shape from the file path).
 
 The hierarchy is load-bearing for retrieval quality, so it is never
 flattened away: every chunk records the full ``section_path``.
@@ -20,7 +26,9 @@ flattened away: every chunk records the full ``section_path``.
 
 from __future__ import annotations
 
+import fnmatch
 import logging
+import re
 from pathlib import Path
 from typing import Iterator
 
@@ -30,6 +38,9 @@ from blackbook.ingestion.github_base import SKIP_DIRS, SKIP_SUFFIXES, GithubTarb
 from blackbook.retrieval.chunking import chunk_markdown
 
 log = logging.getLogger(__name__)
+
+# Jekyll-style ``permalink: /machines/easy/code/`` front-matter key.
+_PERMALINK_RE = re.compile(r"^permalink:\s*[\"']?([^\"'\s]+)[\"']?\s*$", re.M)
 
 
 class GithubMarkdownAdapter(GithubTarballAdapter):
@@ -64,12 +75,15 @@ class GithubMarkdownAdapter(GithubTarballAdapter):
     def _iter_markdown(self, root: Path) -> Iterator[Path]:
         glob = self.config.include_glob or "**/*.md"
         content_root = (self.config.content_root or "").strip("/")
+        excludes = self._exclude_patterns()
         for path in root.glob(glob):
             rel = path.relative_to(root)
             # Skip non-content directories.
             if any(part in SKIP_DIRS for part in rel.parts):
                 continue
             if path.suffix.lower() in SKIP_SUFFIXES:
+                continue
+            if excludes and any(fnmatch.fnmatch(rel.as_posix(), pat) for pat in excludes):
                 continue
             # Restrict to the configured subtree when one is set.
             if content_root and (
@@ -79,6 +93,14 @@ class GithubMarkdownAdapter(GithubTarballAdapter):
             ):
                 continue
             yield path
+
+    def _exclude_patterns(self) -> list[str]:
+        """Parsed ``exclude_glob``: comma-separated, whitespace-stripped."""
+        return [
+            p.strip()
+            for p in (self.config.exclude_glob or "").split(",")
+            if p.strip()
+        ]
 
     def _rel_to_repo(self, root: Path, path: Path) -> Path:
         """Repo-root-relative path (``content_root`` NOT stripped)."""
@@ -104,13 +126,13 @@ class GithubMarkdownAdapter(GithubTarballAdapter):
         raw = path.read_text(encoding="utf-8", errors="replace")
         if not raw.strip():
             return None
-        # Strip YAML front matter if present.
-        body = self._strip_front_matter(raw)
+        # Strip YAML front matter if present (keep it for URL mapping).
+        front_matter, body = self._split_front_matter(raw)
         rel = self._rel_to_repo(root, path)
         external_id = str(rel)
         categories = self._category_from_path(root, path)
         title = self._extract_title(body) or self._fallback_title(path, root)
-        url = self._source_url(root, path)
+        url = self._source_url(root, path, front_matter=front_matter)
         chunks = chunk_markdown(body, title_path=categories + [title])
         return ParsedDocument(
             external_id=external_id,
@@ -134,12 +156,18 @@ class GithubMarkdownAdapter(GithubTarballAdapter):
         return cls._humanize(stem)
 
     @staticmethod
-    def _strip_front_matter(text: str) -> str:
+    def _split_front_matter(text: str) -> tuple[str, str]:
+        """Split ``(front_matter, body)``; front matter is ``""`` when absent."""
         if text.startswith("---"):
             end = text.find("\n---", 3)
             if end != -1:
-                return text[end + 4 :].lstrip("\n")
-        return text
+                return text[3:end], text[end + 4 :].lstrip("\n")
+        return "", text
+
+    @staticmethod
+    def _permalink(front_matter: str) -> str | None:
+        m = _PERMALINK_RE.search(front_matter)
+        return m.group(1) if m else None
 
     @staticmethod
     def _extract_title(body: str) -> str | None:
@@ -151,13 +179,16 @@ class GithubMarkdownAdapter(GithubTarballAdapter):
                 break
         return None
 
-    def _source_url(self, root: Path, path: Path) -> str:
+    def _source_url(self, root: Path, path: Path, front_matter: str = "") -> str:
         """Map the repo path to a URL for the published page.
 
-        With ``site_url`` set, the page URL is the site base plus the path
-        relative to ``content_root`` (minus ``.md``, and a trailing
-        ``index`` collapses to the directory). Without it, the GitHub blob
-        URL is used: it always resolves, even for repos without a site.
+        Priority order when ``site_url`` is set: a Jekyll ``permalink`` in the
+        front matter (the author's canonical link — it can differ from the
+        file path in case or shape), else the site base plus the path relative
+        to ``content_root`` (minus ``.md``; a trailing ``index`` or ``README``
+        collapses to its directory, so a repo landing page maps to the site
+        root). Without ``site_url``, the GitHub blob URL is used: it always
+        resolves, even for repos without a site.
         """
         rel = self._rel_to_repo(root, path)
         rel_str = str(rel).replace("\\", "/")
@@ -165,6 +196,12 @@ class GithubMarkdownAdapter(GithubTarballAdapter):
         if not site:
             owner, repo = self._repo_slug()
             return f"https://github.com/{owner}/{repo}/blob/{self._ref()}/{rel_str}"
+        permalink = self._permalink(front_matter)
+        if permalink:
+            p = permalink.strip()
+            if not p.startswith("/"):
+                p = "/" + p
+            return f"{site}{p}"
         content_root = (self.config.content_root or "").strip("/")
         if content_root:
             prefix = content_root + "/"
@@ -172,6 +209,9 @@ class GithubMarkdownAdapter(GithubTarballAdapter):
                 rel_str = rel_str[len(prefix) :]
         if rel_str.lower().endswith(".md"):
             rel_str = rel_str[:-3]
-        if rel_str.lower().endswith("/index"):
-            rel_str = rel_str[: -len("index")]
+        lowered = rel_str.lower()
+        if lowered.endswith("/index") or lowered.endswith("/readme"):
+            rel_str = rel_str[: rel_str.rfind("/") + 1]
+        elif lowered == "index" or lowered == "readme":
+            rel_str = ""
         return f"{site}/{rel_str}"

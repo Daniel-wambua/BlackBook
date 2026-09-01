@@ -2,10 +2,10 @@
 
 <img src="assets/blackbook-mcp-final-refined.png" alt="BlackBook MCP Logo" width="220" style="margin-bottom: 20px;"/>
 
-# BlackBook MCP v0.7.1
+# BlackBook MCP v0.7.2
 ### Source-Grounded Cybersecurity Knowledge & Research MCP
 
-[![Version](https://img.shields.io/badge/version-0.7.1-22d3ee?style=flat-square)](#)
+[![Version](https://img.shields.io/badge/version-0.7.2-22d3ee?style=flat-square)](#)
 [![Python](https://img.shields.io/badge/python-3.10%2B-3776AB?style=flat-square&logo=python&logoColor=white)](https://www.python.org/)
 [![Protocol](https://img.shields.io/badge/protocol-MCP-6b6bec?style=flat-square)](https://modelcontextprotocol.io/)
 [![MCP Tools](https://img.shields.io/badge/MCP%20tools-6-2ea043?style=flat-square)](#available-mcp-tools)
@@ -65,7 +65,7 @@ Claude is the orchestrator.
 
 ## Architecture Overview
 
-BlackBook MCP v0.7.1 is a source-grounded knowledge system: every query flows through
+BlackBook MCP v0.7.2 is a source-grounded knowledge system: every query flows through
 a hybrid retrieval facade, is enriched (never gated) by a knowledge graph, and returns
 results that resolve to exact, verifiable citations. Nothing is executed.
 
@@ -82,7 +82,7 @@ results that resolve to exact, verifiable citations. Nothing is executed.
   "nodeTextColor": "#fee2e2"
 }}}%%
 graph TD
-    A[AI Agent - Claude / Cursor / VS Code] -->|MCP Protocol over stdio| B[BlackBook MCP Server v0.7.1]
+    A[AI Agent - Claude / Cursor / VS Code] -->|MCP Protocol over stdio| B[BlackBook MCP Server v0.7.2]
 
     B --> C[Hybrid Retrieval Facade]
     B --> D[6 Knowledge Tools]
@@ -110,6 +110,7 @@ graph TD
     R --> X["MITRE ATT&CK"]
     R --> Y[GTFOBins + LOLBAS + LOOBins]
     R --> Z[Payloads + Recipes + WADComs]
+    R --> AA[InternalAllTheThings + HTB Writeups]
 
     B --> V[Exact Citations and Provenance]
     V --> W[chunk_id resolves to verifiable excerpt]
@@ -157,9 +158,10 @@ source chunk.
 
 ## Features (current phase)
 
-* **Source-grounded search** across 10 built-in sources: HackTricks, 0xdf
+* **Source-grounded search** across 12 built-in sources: HackTricks, 0xdf
   writeups, MITRE ATT&CK, GTFOBins, LOLBAS, LOOBins, WADComs,
-  PayloadsAllTheThings, The Hacker Recipes, and local PDFs
+  PayloadsAllTheThings, The Hacker Recipes, Internal All The Things,
+  Moamen Basel's HTB writeups, and local PDFs
 * **Exact, verifiable citations**: every reference resolves to real indexed text
 * **Structure-preserving chunking**: heading breadcrumbs and code blocks intact
 * **Hybrid retrieval facade** with reranking + source diversity: lexical (FTS5
@@ -229,10 +231,12 @@ retrieval:
   per_document_cap: 2              # source diversity
 ```
 
-Eight sources are registered by default (run `blackbook sources` to list them).
+Twelve sources are registered by default (run `blackbook sources` to list them).
 GitHub-backed sources accept a few extra keys: `ref` (branch), `include_glob`
-(which files to index), `content_root` (restrict to a subtree), and `site_url`
-(map citations to the published site instead of the GitHub blob URL). See
+(which files to index), `exclude_glob` (skip repo plumbing / link indexes),
+`content_root` (restrict to a subtree), and `site_url` (map citations to the
+published site instead of the GitHub blob URL; a Jekyll `permalink` in a
+page's front matter wins over the path-derived URL). See
 `config.example.yaml`.
 
 ## Initial ingestion
@@ -247,6 +251,8 @@ blackbook ingest --source loobins       # macOS living-off-the-land binaries
 blackbook ingest --source wadcoms       # offensive Windows/AD command cheat sheets
 blackbook ingest --source payloads     # PayloadsAllTheThings
 blackbook ingest --source hacker_recipes   # The Hacker Recipes
+blackbook ingest --source internal_all_the_things   # AD / internal network cheat sheets
+blackbook ingest --source htb_writeups     # Moamen Basel's HTB writeups + cheatsheets
 blackbook ingest                        # all enabled sources
 
 # bound the size during a first run:
@@ -254,7 +260,9 @@ blackbook ingest                        # all enabled sources
 ```
 
 Re-running `ingest` is incremental; unchanged documents are skipped via content
-hash.
+hash. Citation metadata (URLs, titles) is refreshed in place when it drifts, so
+a URL-mapping fix or a source re-publishing under new permalinks self-heals
+without re-chunking.
 
 ## PDF ingestion
 
@@ -358,7 +366,7 @@ the banner and logs never corrupt an MCP client's stream.
 ██████╔╝███████╗██║  ██║╚██████╗██║  ██╗██████╔╝╚██████╔╝╚██████╔╝██║  ██╗
 ╚═════╝ ╚══════╝╚═╝  ╚═╝ ╚═════╝╚═╝  ╚═╝╚═════╝  ╚═════╝  ╚═════╝ ╚═╝  ╚═╝
   Source-grounded cybersecurity knowledge & research MCP
-  v0.7.1  ·  stdio  ·  read-only · no execution · every claim cited
+  v0.7.2  ·  stdio  ·  read-only · no execution · every claim cited
   corpus  10 sources · 3719 docs · 103360 chunks
   graph   702 entities · 22338 relationships · 1 case
 ```

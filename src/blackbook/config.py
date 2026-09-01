@@ -59,6 +59,10 @@ class SourceConfig(BaseModel):
     # "" = adapter default ("**/*.pdf" for filesystem, "**/*.md" for
     # GitHub-markdown sources)
     include_glob: str = ""
+    # Comma-separated glob patterns (fnmatch semantics, "/"-separated
+    # repo-relative paths) for files to skip even when include_glob matches.
+    # Use to drop repo plumbing or link-index files from a GitHub source.
+    exclude_glob: str = ""
 
     # Fetch limits (security / cost control)
     max_files: int | None = None
@@ -233,6 +237,39 @@ def _default_sources() -> list[SourceConfig]:
             ref="master",
             content_root="_wadcoms",
             site_url="https://wadcoms.github.io",
+        ),
+        # Internal All The Things: swisskyrepo's AD / internal-network
+        # pentest cheat sheets (MkDocs, content under docs/).
+        SourceConfig(
+            id="internal_all_the_things",
+            name="Internal All The Things",
+            enabled=True,
+            type="git",
+            authority="trusted",
+            url="https://github.com/swisskyrepo/InternalAllTheThings.git",
+            ref="main",
+            content_root="docs",
+            site_url="https://swisskyrepo.github.io/InternalAllTheThings",
+        ),
+        # Moamen Basel's HTB writeups collection (Jekyll/Just the Docs).
+        # Full in-repo machine writeups, challenges and cheatsheets; the
+        # 0xdf/IppSec link indexes duplicate other sources, and templates /
+        # CONTRIBUTING / the GitHub landing README are repo plumbing, so all
+        # are excluded. Every real page carries a Jekyll permalink, which the
+        # adapter uses as its canonical citation URL.
+        SourceConfig(
+            id="htb_writeups",
+            name="HTB Writeups (Moamen Basel)",
+            enabled=True,
+            type="git",
+            authority="trusted",
+            url="https://github.com/momenbasel/htb-writeups.git",
+            ref="main",
+            site_url="https://www.moamenbasel.com/htb-writeups",
+            exclude_glob=(
+                "templates/**, 0xdf-htb-machines.md, ippsec-video-index.md, "
+                "CONTRIBUTING.md, README.md"
+            ),
         ),
     ]
 

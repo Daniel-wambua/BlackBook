@@ -180,6 +180,37 @@ class Database:
         assert row is not None
         return int(row["doc_id"])
 
+    def refresh_document_citation(
+        self,
+        source_id: str,
+        external_id: str,
+        *,
+        title: str,
+        url: str | None,
+        path: str | None,
+        categories: list[str],
+    ) -> None:
+        """Update citation metadata (title/url/path/categories) on a document
+        whose content is otherwise unchanged — e.g. a source re-publishes its
+        pages under new permalinks. Chunks and their embeddings are untouched,
+        so this never triggers re-embedding or new chunk ids.
+        """
+        self.conn.execute(
+            """
+            UPDATE documents
+            SET title = ?, url = ?, path = ?, categories = ?, updated_at = datetime('now')
+            WHERE source_id = ? AND external_id = ?
+            """,
+            (
+                title,
+                url,
+                path,
+                json.dumps(categories),
+                source_id,
+                external_id,
+            ),
+        )
+
     def get_document(self, doc_id: int) -> dict | None:
         row = self.conn.execute(
             "SELECT * FROM documents WHERE doc_id = ?", (doc_id,)

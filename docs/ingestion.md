@@ -27,6 +27,8 @@ Registered adapters:
 | `loobins` | `LooBinsAdapter` | git | macOS binaries; `LOOBins/<Name>.yml` with use cases + ATT&CK tactics |
 | `wadcoms` | `WadcomsAdapter` | git | Windows/AD cheat sheets; payload lives in markdown front matter |
 | `attack` | `MitreAttackAdapter` | git | MITRE ATT&CK enterprise STIX bundle; techniques by ATT&CK ID |
+| `internal_all_the_things` | `GithubMarkdownAdapter` | git | AD/internal-network cheat sheets (MkDocs, `docs/` subtree); config-only source via the git-type fallback |
+| `htb_writeups` | `GithubMarkdownAdapter` | git | Moamen Basel's HTB writeups + cheatsheets (Jekyll); config-only source via the git-type fallback |
 
 Add a future source by subclassing `SourceAdapter` (or, for a GitHub repo,
 `GithubTarballAdapter`) and registering it in
@@ -50,10 +52,16 @@ configuration-driven, so most new markdown sources need no code:
 
 * `ref` — branch to track.
 * `include_glob` — which files to index (default `**/*.md`).
+* `exclude_glob` — comma-separated fnmatch patterns (repo-relative,
+  `/`-separated) for files to skip even when `include_glob` matches: repo
+  plumbing, templates, link-index pages that duplicate other sources.
 * `content_root` — restrict indexing to a repo subtree (and strip it from
   category breadcrumbs).
 * `site_url` — map citations to the published site (`/index` collapses to the
-  directory); without it, citations point at the GitHub blob URL.
+  directory); without it, citations point at the GitHub blob URL. When a page
+  carries a Jekyll `permalink` in its front matter, that permalink wins over
+  the path-derived URL — it is the author's canonical link and can differ
+  from the file path in case or shape.
 
 GTFOBins and LOLBAS render their YAML corpora to structured markdown instead:
 one document per binary, every abuse function/command preserved with the

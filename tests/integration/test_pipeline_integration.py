@@ -98,4 +98,26 @@ def test_reingest_is_incremental(tmp_path):
     assert first.stats.parsed == 1
     assert second.stats.parsed == 0
     assert second.stats.skipped_unchanged == 1
+
+    # Re-ingest with a different (fixed) URL mapping: content is unchanged,
+    # so nothing re-chunks, but the stored citation URL self-heals.
+    doc = db.get_document_by_external("hacktricks", "active-directory-methodology/kerberoasting.md")
+    assert doc and doc["url"]
+    chunk_ids_before = [c["chunk_id"] for c in db.document_chunks(doc["doc_id"])]
+
+    class Remapped(HackTricksAdapter):
+        def _source_url(self, root, path, front_matter: str = "") -> str:
+            return "https://book.hacktricks.xyz/fixed/kerberoasting"
+
+    remapped = Remapped(cfg, raw_dir=str(tmp_path))
+    remapped._extract_root = FIXTURES / "hacktricks"
+    remapped.fetch = lambda force=False: None
+    third = pipeline.run(remapped)
+    assert third.stats.parsed == 0
+    assert third.stats.skipped_unchanged == 1
+
+    doc = db.get_document_by_external("hacktricks", "active-directory-methodology/kerberoasting.md")
+    assert doc["url"] == "https://book.hacktricks.xyz/fixed/kerberoasting"
+    # chunks untouched: same ids, nothing re-written
+    assert [c["chunk_id"] for c in db.document_chunks(doc["doc_id"])] == chunk_ids_before
     db.close()

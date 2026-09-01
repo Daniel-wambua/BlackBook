@@ -103,6 +103,34 @@ sources:
     content_root: _wadcoms
     site_url: https://wadcoms.github.io
 
+  # AD / internal-network pentest cheat sheets (swisskyrepo, MkDocs).
+  # Pure-configuration source: resolves to the generic GitHub-markdown
+  # adapter via the git-type fallback.
+  - id: internal_all_the_things
+    name: Internal All The Things
+    enabled: true
+    type: git
+    authority: trusted
+    url: https://github.com/swisskyrepo/InternalAllTheThings.git
+    ref: main
+    content_root: docs
+    site_url: https://swisskyrepo.github.io/InternalAllTheThings
+
+  # Moamen Basel's HTB writeups (Jekyll). Pages carry Jekyll permalinks,
+  # which become the citation URLs; exclude_glob drops the 0xdf/IppSec link
+  # indexes (duplicating other sources) and repo plumbing.
+  - id: htb_writeups
+    name: HTB Writeups (Moamen Basel)
+    enabled: true
+    type: git
+    authority: trusted
+    url: https://github.com/momenbasel/htb-writeups.git
+    ref: main
+    site_url: https://www.moamenbasel.com/htb-writeups
+    exclude_glob: >-
+      templates/**, 0xdf-htb-machines.md, ippsec-video-index.md,
+      CONTRIBUTING.md, README.md
+
   # MITRE ATT&CK enterprise STIX bundle (official; ~54 MB download).
   # Ingesting it lets knowledge_technique return official tactics, platforms,
   # and an attack.mitre.org link alongside the cited corpus references.
