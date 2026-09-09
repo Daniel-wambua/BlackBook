@@ -175,7 +175,8 @@ source chunk.
   ever gating retrieval
 * **Modular ingestion** via a `SourceAdapter` interface (add sources without a rewrite)
 * **CLI** for ingestion, search, graph, stats, sources, diagnostics
-* **MCP server over stdio** for Claude Code / Cursor / VS Code
+* **MCP server over stdio** (default) for Claude Code / Cursor / VS Code, with an
+  optional **streamable-http** transport (`serve --http`) for a shared network server
 
 ## Installation
 
@@ -318,13 +319,55 @@ blackbook embed --reembed             # drop existing vectors first, then re-emb
 Embeddings are computed **locally** and never leave the machine. `blackbook doctor`
 reports coverage (`N/M embedded`).
 
+## Transport modes
+
+BlackBook speaks MCP over two transports. **stdio is the default** and is what
+you almost always want.
+
+| Transport | How it starts | Who launches it | Use it for |
+|-----------|---------------|-----------------|------------|
+| **stdio** (default) | `blackbook serve` | the MCP client spawns it automatically | Claude Code / Cursor / VS Code |
+| **streamable-http** | `blackbook serve --http` | you start it, it stays running | a shared always-on server, remote access, or just to see the banner |
+
+* **stdio** — the client (Claude Code, Cursor, VS Code) owns the process: it
+  spawns `blackbook serve` on session start, talks over stdin/stdout, and stops
+  it on exit. Nothing to launch by hand. This is the mode all the setup snippets
+  below use.
+* **streamable-http** — a long-lived network server you run yourself, reachable
+  at `http://<host>:<port>/mcp` with a `GET /health` check. Handy for a shared
+  instance or when you want the banner in front of you. It is **not** something a
+  client auto-launches, so don't register an HTTP endpoint that isn't already
+  running or the client will just fail to connect each session.
+
+```bash
+blackbook serve                       # stdio (default)
+blackbook serve --http                # streamable-http on 127.0.0.1:8890/mcp
+blackbook serve --http --port 9000    # override port
+blackbook serve --http --host 0.0.0.0 # bind all interfaces (see auth note below)
+```
+
+Equivalently, set `BLACKBOOK_TRANSPORT=streamable-http` (or `sse`) in the
+environment. HTTP host/port/path come from the `server:` block in
+`config.yaml` (defaults `127.0.0.1` / `8890` / `/mcp`); `--host` and `--port`
+override them for a single run.
+
+> **Bind safety.** BlackBook refuses to start on a non-loopback address (e.g.
+> `0.0.0.0`) unless a bearer token is set, guarding against an accidentally
+> exposed, unauthenticated server. Set `server.auth_token` in `config.yaml` (or
+> `BLACKBOOK_SERVER__AUTH_TOKEN`) and clients must then send
+> `Authorization: Bearer <token>`. Only flip `require_auth_off_loopback: false`
+> if you understand the exposure.
+
 ## Claude Code setup
 
 ```bash
-claude mcp add blackbook -- blackbook serve
+claude mcp add blackbook -- blackbook serve            # this project (local scope)
+claude mcp add blackbook -s user -- blackbook serve    # every directory (user scope)
 ```
 
-or in your MCP config (`.mcp.json` / `~/.config/claude/...`):
+Use `-s user` to register it once for all your projects; Claude Code then
+auto-launches it everywhere over stdio. Or put it in your MCP config
+(`.mcp.json` / `~/.config/claude/...`):
 
 ```json
 {
@@ -373,7 +416,10 @@ the banner and logs never corrupt an MCP client's stream.
 
 In a real terminal the wordmark is gradient-lit (cyan→indigo, intentionally
 distinct from an execution MCP's red) and the corpus/graph lines reflect your
-live index. Suppress it with `blackbook serve --no-banner`.
+live index. The transport line reflects how you started it (`stdio`, or
+`streamable-http · http://127.0.0.1:8890/mcp` under `--http`, where the MCP
+endpoint and `/health` URL are also printed). Suppress the banner with
+`blackbook serve --no-banner`.
 
 Status and log lines use a compact, level-styled prefix, showing the successes and
 failures at a glance:
