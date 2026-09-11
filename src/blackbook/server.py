@@ -20,7 +20,17 @@ from blackbook.mcp.schemas import (
     CaseSearchOutput,
     ContextInput,
     ContextOutput,
+    FindingReviewInput,
+    FindingReviewOutput,
     GetSourceInput,
+    HuntPlanInput,
+    HuntPlanOutput,
+    KnowledgeCompareInput,
+    KnowledgeCompareOutput,
+    KnowledgeSourceInput,
+    KnowledgeSourcesOutput,
+    ReportDraftInput,
+    ReportDraftOutput,
     ResearchInput,
     ResearchOutput,
     SearchInput,
@@ -58,6 +68,10 @@ def build_server(settings=None, db: Database | None = None) -> FastMCP:
             "cited references and related cases), and knowledge_source to retrieve "
             "exact supporting excerpts. Use knowledge_context to keep local "
             "investigation state — create a case and record observations, "
+            "knowledge_hunt_plan for a cited, non-executing validation plan, "
+            "knowledge_finding_review to check evidence gaps, knowledge_report_draft "
+            "to draft from a local case, knowledge_sources to inspect corpus status, "
+            "and knowledge_compare to compare independent source views. "
             "findings, and hypotheses as you work. Every knowledge result carries "
             "verifiable provenance. BlackBook never executes commands or touches "
             "remote systems."
@@ -312,6 +326,99 @@ def build_server(settings=None, db: Database | None = None) -> FastMCP:
             include_cases=include_cases,
         )
         return tools.knowledge_research(inp)
+
+    @mcp.tool(
+        name="knowledge_hunt_plan",
+        description=(
+            "Build a source-grounded bug bounty validation plan from an observation. "
+            "Returns detected signals, bounded hypotheses, validation focus, and "
+            "real citations. It never scans, executes commands, or contacts a target."
+        ),
+    )
+    def knowledge_hunt_plan(
+        observation: str,
+        target: str = "",
+        platform: str | None = None,
+        sources: list[str] | None = None,
+        techniques: list[str] | None = None,
+        limit: int = 6,
+    ) -> HuntPlanOutput:
+        return tools.knowledge_hunt_plan(HuntPlanInput(
+            observation=observation,
+            target=target,
+            platform=platform,
+            sources=sources,
+            techniques=techniques,
+            limit=limit,
+        ))
+
+    @mcp.tool(
+        name="knowledge_finding_review",
+        description=(
+            "Review a suspected bug bounty finding against indexed guidance and an "
+            "optional local case. Returns evidence status, missing proof, citations, "
+            "and severity guidance without declaring an unproven finding valid."
+        ),
+    )
+    def knowledge_finding_review(
+        finding: str,
+        case: str | None = None,
+        sources: list[str] | None = None,
+        platform: str | None = None,
+        limit: int = 6,
+    ) -> FindingReviewOutput:
+        return tools.knowledge_finding_review(FindingReviewInput(
+            finding=finding,
+            case=case,
+            sources=sources,
+            platform=platform,
+            limit=limit,
+        ))
+
+    @mcp.tool(
+        name="knowledge_report_draft",
+        description=(
+            "Create a cautious bug bounty report draft from a local knowledge_context "
+            "case. It includes recorded observations, reproducibility prompts, cited "
+            "guidance, and explicit warnings when evidence or confirmation is missing."
+        ),
+    )
+    def knowledge_report_draft(
+        case: str,
+        sources: list[str] | None = None,
+        limit: int = 8,
+    ) -> ReportDraftOutput:
+        return tools.knowledge_report_draft(ReportDraftInput(
+            case=case, sources=sources, limit=limit
+        ))
+
+    @mcp.tool(
+        name="knowledge_sources",
+        description=(
+            "List configured knowledge sources and their actual indexed document and "
+            "chunk counts. Use this before research to choose sources; read-only."
+        ),
+    )
+    def knowledge_sources(source: str | None = None) -> KnowledgeSourcesOutput:
+        return tools.knowledge_sources(KnowledgeSourceInput(source=source))
+
+    @mcp.tool(
+        name="knowledge_compare",
+        description=(
+            "Compare independently retrieved evidence for a topic across at least two "
+            "selected sources. Returns per-source citations and mechanically computed "
+            "lexical overlap; it does not claim that overlap proves agreement."
+        ),
+    )
+    def knowledge_compare(
+        topic: str,
+        sources: list[str],
+        platform: str | None = None,
+        limit: int = 4,
+    ) -> KnowledgeCompareOutput:
+        return tools.knowledge_compare(KnowledgeCompareInput(
+            topic=topic, sources=sources, platform=platform, limit=limit
+        ))
 
     @mcp.tool(
         name="knowledge_context",

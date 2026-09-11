@@ -2,13 +2,13 @@
 
 <img src="assets/blackbook-mcp-final-refined.png" alt="BlackBook MCP Logo" width="220" style="margin-bottom: 20px;"/>
 
-# BlackBook MCP v0.7.2
+# BlackBook MCP v0.8.0
 ### Source-Grounded Cybersecurity Knowledge & Research MCP
 
-[![Version](https://img.shields.io/badge/version-0.7.2-22d3ee?style=flat-square)](#)
+[![Version](https://img.shields.io/badge/version-0.8.0-22d3ee?style=flat-square)](#)
 [![Python](https://img.shields.io/badge/python-3.10%2B-3776AB?style=flat-square&logo=python&logoColor=white)](https://www.python.org/)
 [![Protocol](https://img.shields.io/badge/protocol-MCP-6b6bec?style=flat-square)](https://modelcontextprotocol.io/)
-[![MCP Tools](https://img.shields.io/badge/MCP%20tools-6-2ea043?style=flat-square)](#available-mcp-tools)
+[![MCP Tools](https://img.shields.io/badge/MCP%20tools-11-2ea043?style=flat-square)](#available-mcp-tools)
 [![Retrieval](https://img.shields.io/badge/retrieval-FTS5%20%2B%20Semantic-22b8f0?style=flat-square)](#retrieval-architecture)
 [![Sources](https://img.shields.io/badge/sources-21%20default%20sources-8957e5?style=flat-square)](#what-it-is)
 [![Tests](https://img.shields.io/badge/tests-257%20passing-3fb950?style=flat-square)](#testing)
@@ -65,7 +65,7 @@ Claude is the orchestrator.
 
 ## Architecture Overview
 
-BlackBook MCP v0.7.2 is a source-grounded knowledge system: every query flows through
+BlackBook MCP v0.8.0 is a source-grounded knowledge system: every query flows through
 a hybrid retrieval facade, is enriched (never gated) by a knowledge graph, and returns
 results that resolve to exact, verifiable citations. Nothing is executed.
 
@@ -82,10 +82,10 @@ results that resolve to exact, verifiable citations. Nothing is executed.
   "nodeTextColor": "#fee2e2"
 }}}%%
 graph TD
-    A[AI Agent - Claude / Cursor / VS Code] -->|MCP Protocol over stdio| B[BlackBook MCP Server v0.7.2]
+    A[AI Agent - Claude / Cursor / VS Code] -->|MCP Protocol over stdio| B[BlackBook MCP Server v0.8.0]
 
     B --> C[Hybrid Retrieval Facade]
-    B --> D[6 Knowledge Tools]
+    B --> D[11 Knowledge Tools]
     B --> E[Knowledge Graph]
 
     C --> F[FTS5 BM25 - always on]
@@ -424,7 +424,7 @@ the banner and logs never corrupt an MCP client's stream.
 ██████╔╝███████╗██║  ██║╚██████╗██║  ██╗██████╔╝╚██████╔╝╚██████╔╝██║  ██╗
 ╚═════╝ ╚══════╝╚═╝  ╚═╝ ╚═════╝╚═╝  ╚═╝╚═════╝  ╚═════╝  ╚═════╝ ╚═╝  ╚═╝
   Source-grounded cybersecurity knowledge & research MCP
-  v0.7.2  ·  stdio  ·  read-only · no execution · every claim cited
+  v0.8.0  ·  stdio  ·  read-only · no execution · every claim cited
   corpus  <live database count> sources · <live count> docs · <live count> chunks · <live count> embeddings
   graph   <live count> entities · <live count> relationships · <live count> cases
 ```
@@ -460,6 +460,11 @@ files stay clean.
 | `knowledge_case_search` | ✅ | Similar-case (writeup) retrieval, techniques annotated |
 | `knowledge_research` | ✅ | Observation-driven, source-grounded research packets |
 | `knowledge_context` | ✅ | Local investigation state (cases + observations) |
+| `knowledge_hunt_plan` | ✅ | Cited, non-executing bug bounty validation plans |
+| `knowledge_finding_review` | ✅ | Evidence-gap and severity-guidance review |
+| `knowledge_report_draft` | ✅ | Cautious report drafts from local case evidence |
+| `knowledge_sources` | ✅ | Configured sources and actual index counts |
+| `knowledge_compare` | ✅ | Independent multi-source evidence comparison |
 
 Only implemented tools are registered; nothing is stubbed or faked.
 

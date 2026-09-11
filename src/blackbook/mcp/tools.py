@@ -9,6 +9,11 @@ The registered tool surface:
 * ``knowledge_research`` — turn a free-text observation into a source-grounded
   research packet (detected signals, technique briefs, cited references, cases)
 * ``knowledge_context`` — manage local investigation state (cases + observations)
+* ``knowledge_hunt_plan`` — build a cited, non-executing validation plan
+* ``knowledge_finding_review`` — review evidence gaps and severity guidance
+* ``knowledge_report_draft`` — draft from local case observations
+* ``knowledge_sources`` — inspect configured sources and index counts
+* ``knowledge_compare`` — compare independent retrieval views by source
 
 All search/technique/research tools are read-only over the index and always
 return structured, provenance-tagged output; every citation resolves to a real
@@ -21,6 +26,8 @@ from __future__ import annotations
 
 import json
 import logging
+import re
+from collections import Counter
 
 from blackbook.config import Settings
 from blackbook.knowledge.case_export import build_case_state, render_case_markdown
@@ -36,8 +43,21 @@ from blackbook.mcp.schemas import (
     ContextInput,
     ContextOutput,
     EvidenceRef,
+    FindingReviewInput,
+    FindingReviewOutput,
     GetSourceInput,
     GraphRef,
+    HuntPlanInput,
+    HuntPlanItem,
+    HuntPlanOutput,
+    KnowledgeCompareInput,
+    KnowledgeCompareOutput,
+    KnowledgeCompareView,
+    KnowledgeSourceInput,
+    KnowledgeSourceStatus,
+    KnowledgeSourcesOutput,
+    ReportDraftInput,
+    ReportDraftOutput,
     ResearchInput,
     ResearchOutput,
     ResearchSignals,
@@ -599,6 +619,279 @@ class KnowledgeTools:
             references=references,
             related_cases=related_cases,
             note=note,
+        )
+
+    # -- bug bounty workflow tools ----------------------------------------
+
+    def knowledge_hunt_plan(self, inp: HuntPlanInput) -> HuntPlanOutput:
+        """Build a retrieval-backed, non-executing validation plan."""
+        source_ids = self.settings.source_ids(inp.sources)
+        services, techniques, tools = extract_signals(inp.observation)
+        if source_ids == []:
+            return HuntPlanOutput(
+                observation=inp.observation,
+                target=inp.target,
+                signals=ResearchSignals(services=services, techniques=techniques, tools=tools),
+                note=f"No enabled source matches {inp.sources}; nothing was searched.",
+            )
+
+        candidates: list[tuple[str, str]] = []
+        for term in techniques:
+            candidates.append((term, "technique"))
+        for term in services:
+            candidates.append((term, "service"))
+        for term in tools:
+            candidates.append((term, "tool"))
+        for term in inp.techniques or []:
+            canonical = resolve_technique(term) or term.strip()
+            if canonical and not any(c[0].lower() == canonical.lower() for c in candidates):
+                candidates.append((canonical, "technique"))
+        if not candidates:
+            candidates.append((inp.observation[:80].strip(), "observation"))
+
+        plans: list[HuntPlanItem] = []
+        for term, category in candidates[: inp.limit]:
+            query = f"{term} {inp.observation}".strip()
+            results = self.retriever.search(
+                query,
+                mode="technique" if category == "technique" else "hybrid",
+                source_ids=source_ids,
+                platform=inp.platform,
+                categories=None,
+                techniques=[term] if category == "technique" and resolve_technique(term) else [],
+                limit=min(inp.limit, 5),
+            )
+            if category == "technique":
+                focus = [
+                    "Confirm the behavior with a controlled request and response pair.",
+                    "Test the authorization or trust boundary using only in-scope accounts and objects.",
+                    "Capture reproducible evidence before assigning impact.",
+                ]
+            elif category == "service":
+                focus = [
+                    "Identify the exposed feature and its authentication boundary.",
+                    "Check documented misconfigurations and affected versions.",
+                    "Record a harmless, reproducible response as evidence.",
+                ]
+            elif category == "tool":
+                focus = [
+                    "Confirm the tool or integration is actually reachable in scope.",
+                    "Check input, authorization, and output handling.",
+                    "Avoid execution or state-changing validation through Blackbook.",
+                ]
+            else:
+                focus = [
+                    "Break the observation into a concrete, testable hypothesis.",
+                    "Find an observable security impact, not only a theoretical weakness.",
+                    "Preserve request, response, account, and object identifiers as evidence.",
+                ]
+            plans.append(
+                HuntPlanItem(
+                    title=f"Validate {term}",
+                    category=category,
+                    rationale=f"The observation contains or requests the {category} signal '{term}'.",
+                    validation_focus=focus,
+                    references=[self._to_item(r, "standard") for r in results],
+                )
+            )
+        return HuntPlanOutput(
+            observation=inp.observation,
+            target=inp.target,
+            signals=ResearchSignals(services=services, techniques=techniques, tools=tools),
+            plans=plans,
+            note="Plan items are research guidance only; Blackbook performs no target testing.",
+        )
+
+    def knowledge_finding_review(self, inp: FindingReviewInput) -> FindingReviewOutput:
+        """Review a suspected finding without upgrading claims beyond evidence."""
+        source_ids = self.settings.source_ids(inp.sources)
+        services, techniques, tools = extract_signals(inp.finding)
+        observed: list[str] = []
+        missing = [
+            "A reproducible request/response pair proving the behavior.",
+            "A demonstrated security impact affecting an in-scope asset or account.",
+            "Evidence that the behavior is not expected functionality or a duplicate.",
+        ]
+        if inp.case:
+            state = self._case_state(inp.case)
+            if state:
+                observed = [
+                    f"[{o.status}] {o.kind}: {o.text}"
+                    for o in state.observations
+                    if o.status in {"tested", "confirmed", "resolved"}
+                ]
+                if any(o.status == "confirmed" for o in state.observations):
+                    missing.pop(0)
+        if source_ids == []:
+            return FindingReviewOutput(
+                finding=inp.finding,
+                case=inp.case,
+                signals=ResearchSignals(services=services, techniques=techniques, tools=tools),
+                evidence_status="no_matching_sources",
+                observed_evidence=observed,
+                missing_evidence=missing,
+                note=f"No enabled source matches {inp.sources}; nothing was searched.",
+            )
+        query = f"{inp.finding} impact severity triage"
+        references = self.retriever.search(
+            query,
+            mode="technique",
+            source_ids=source_ids,
+            platform=inp.platform,
+            categories=None,
+            techniques=techniques,
+            limit=inp.limit,
+        )
+        severity = self.retriever.search(
+            f"{inp.finding} severity impact vulnerability rating",
+            mode="hybrid",
+            source_ids=source_ids,
+            platform=inp.platform,
+            categories=None,
+            techniques=techniques,
+            limit=inp.limit,
+        )
+        status = "case_has_confirmed_evidence" if any(
+            line.startswith("[confirmed]") for line in observed
+        ) else "documentation_only"
+        return FindingReviewOutput(
+            finding=inp.finding,
+            case=inp.case,
+            signals=ResearchSignals(services=services, techniques=techniques, tools=tools),
+            evidence_status=status,
+            observed_evidence=observed,
+            missing_evidence=missing,
+            references=[self._to_item(r, "standard") for r in references],
+            severity_guidance=[self._to_item(r, "standard") for r in severity],
+            note="Documentation supports review criteria; it does not prove this finding.",
+        )
+
+    def knowledge_report_draft(self, inp: ReportDraftInput) -> ReportDraftOutput:
+        """Draft a report from local case observations and cited guidance."""
+        state = self._case_state(inp.case)
+        if state is None:
+            return ReportDraftOutput(
+                case=inp.case,
+                title=f"Unresolved security finding: {inp.case}",
+                summary="No local case was found; no report claims were generated.",
+                impact="Impact is unverified.",
+                remediation="No remediation was generated without a local case and evidence.",
+                warnings=[f"Case '{inp.case}' was not found."],
+            )
+        findings = [o for o in state.observations if o.kind == "finding"]
+        confirmed = [o for o in state.observations if o.status == "confirmed"]
+        evidence = [f"[{o.status}] {o.kind}: {o.text}" for o in state.observations]
+        primary = findings[0].text if findings else (confirmed[0].text if confirmed else "Security observation")
+        references = self.retriever.search(
+            f"{primary} remediation impact",
+            mode="hybrid",
+            source_ids=self.settings.source_ids(inp.sources),
+            platform=state.platform or None,
+            categories=None,
+            techniques=extract_signals(primary)[1],
+            limit=inp.limit,
+        )
+        refs = [self._to_item(r, "standard") for r in references]
+        warnings = [
+            "This is a draft; verify every claim against the target evidence before submission.",
+            "Blackbook does not infer exploitability, ownership, or severity from documentation alone.",
+        ]
+        if not confirmed:
+            warnings.append("No observation is marked confirmed in the case.")
+        return ReportDraftOutput(
+            case=inp.case,
+            title=f"{primary[:120]}",
+            summary=(
+                f"Case '{inp.case}' records a suspected security issue for "
+                f"{state.target or 'the documented target'}."
+            ),
+            observed_evidence=evidence,
+            reproduction_steps=[
+                "Reproduce the behavior using the exact in-scope request and response recorded in the case.",
+                "Repeat with the documented control account, object, or baseline.",
+                "Capture the smallest request/response pair that demonstrates impact.",
+            ],
+            impact=(
+                "Impact is supported by confirmed case observations only; quantify the affected "
+                "asset, account, data, or action before submission."
+            ),
+            remediation="Apply the control described by the cited guidance after confirming the affected component.",
+            severity_basis=refs[: inp.limit],
+            references=refs,
+            warnings=warnings,
+        )
+
+    def knowledge_sources(self, inp: KnowledgeSourceInput) -> KnowledgeSourcesOutput:
+        """Return configured sources with real indexed document/chunk counts."""
+        configured = {source.id: source for source in self.settings.sources}
+        if inp.source is not None and inp.source not in configured:
+            return KnowledgeSourcesOutput(count=0, note=f"Unknown configured source: {inp.source}")
+        counts = self.db.source_index_counts()
+        rows = self.db.list_sources()
+        indexed = {row["source_id"]: row for row in rows}
+        selected = [configured[inp.source]] if inp.source else list(self.settings.sources)
+        statuses = [
+            KnowledgeSourceStatus(
+                id=source.id,
+                name=source.name,
+                enabled=source.enabled,
+                authority=source.authority,
+                source_type=source.type,
+                url=source.url,
+                indexed_documents=counts.get(source.id, {}).get("documents", 0),
+                indexed_chunks=counts.get(source.id, {}).get("chunks", 0),
+            )
+            for source in selected
+        ]
+        return KnowledgeSourcesOutput(
+            count=len(statuses),
+            sources=statuses,
+            note=("Configured source is not indexed yet." if statuses and not indexed.get(statuses[0].id) and inp.source else ""),
+        )
+
+    def knowledge_compare(self, inp: KnowledgeCompareInput) -> KnowledgeCompareOutput:
+        """Retrieve comparable evidence independently from each selected source."""
+        source_ids = self.settings.source_ids(inp.sources)
+        if source_ids == []:
+            return KnowledgeCompareOutput(
+                topic=inp.topic,
+                sources_compared=[],
+                note="No requested sources are enabled; nothing was searched.",
+            )
+        views: list[KnowledgeCompareView] = []
+        token_sources: dict[str, set[str]] = {}
+        for source_id in source_ids or []:
+            config = self.settings.get_source(source_id)
+            if config is None:
+                continue
+            results = self.retriever.search(
+                inp.topic,
+                mode="hybrid",
+                source_ids=[source_id],
+                platform=inp.platform,
+                categories=None,
+                techniques=[],
+                limit=inp.limit,
+            )
+            items = [self._to_item(r, "standard") for r in results]
+            views.append(KnowledgeCompareView(
+                source=source_id,
+                source_name=config.name,
+                authority=config.authority,
+                results=items,
+            ))
+            for item in items:
+                words = set(re.findall(r"[a-z][a-z0-9-]{3,}", item.snippet.lower()))
+                for word in words:
+                    token_sources.setdefault(word, set()).add(source_id)
+        stop = {"that", "this", "with", "from", "into", "when", "which", "their", "have", "will", "about", "your"}
+        shared = sorted(word for word, sources in token_sources.items() if len(sources) >= 2 and word not in stop)
+        return KnowledgeCompareOutput(
+            topic=inp.topic,
+            sources_compared=[view.source for view in views],
+            views=views,
+            shared_terms=shared[:30],
+            note="Views are retrieved independently; shared_terms are lexical overlap, not a claim of factual agreement.",
         )
 
     # -- knowledge_context (Phase 5) ---------------------------------------

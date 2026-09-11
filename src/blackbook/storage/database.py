@@ -133,6 +133,27 @@ class Database:
         rows = self.conn.execute("SELECT * FROM sources ORDER BY source_id").fetchall()
         return [dict(r) for r in rows]
 
+    def source_index_counts(self) -> dict[str, dict[str, int]]:
+        """Return indexed document/chunk counts grouped by source."""
+        rows = self.conn.execute(
+            """
+            SELECT s.source_id,
+                   COUNT(DISTINCT d.doc_id) AS documents,
+                   COUNT(c.chunk_id) AS chunks
+            FROM sources s
+            LEFT JOIN documents d ON d.source_id = s.source_id
+            LEFT JOIN chunks c ON c.doc_id = d.doc_id
+            GROUP BY s.source_id
+            """
+        ).fetchall()
+        return {
+            str(row["source_id"]): {
+                "documents": int(row["documents"]),
+                "chunks": int(row["chunks"]),
+            }
+            for row in rows
+        }
+
     # -- documents --------------------------------------------------------
 
     def upsert_document(self, doc: Document) -> int:

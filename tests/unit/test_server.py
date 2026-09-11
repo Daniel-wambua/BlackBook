@@ -26,6 +26,11 @@ def test_server_registers_all_tools_with_structured_schemas():
             "knowledge_case_search",
             "knowledge_research",
             "knowledge_context",
+            "knowledge_hunt_plan",
+            "knowledge_finding_review",
+            "knowledge_report_draft",
+            "knowledge_sources",
+            "knowledge_compare",
         }
         assert set(by_name) == expected
         assert all(tool.inputSchema.get("type") == "object" for tool in by_name.values())

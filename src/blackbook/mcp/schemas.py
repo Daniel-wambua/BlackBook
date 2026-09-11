@@ -203,6 +203,116 @@ class ResearchOutput(BaseModel):
     note: str = ""
 
 
+# -- bug bounty workflow tools ----------------------------------------------
+
+
+class HuntPlanInput(BaseModel):
+    observation: str = Field(min_length=1, max_length=4000)
+    target: str = Field(default="", max_length=500)
+    platform: str | None = Field(default=None, max_length=100)
+    sources: list[str] | None = None
+    techniques: list[str] | None = None
+    limit: int = Field(default=6, ge=1, le=20)
+
+
+class HuntPlanItem(BaseModel):
+    title: str
+    category: str
+    rationale: str
+    validation_focus: list[str] = Field(default_factory=list)
+    references: list[SearchResultItem] = Field(default_factory=list)
+
+
+class HuntPlanOutput(BaseModel):
+    observation: str
+    target: str = ""
+    signals: ResearchSignals
+    plans: list[HuntPlanItem] = Field(default_factory=list)
+    note: str = ""
+
+
+class FindingReviewInput(BaseModel):
+    finding: str = Field(min_length=1, max_length=4000)
+    case: str | None = Field(default=None, max_length=200)
+    sources: list[str] | None = None
+    platform: str | None = Field(default=None, max_length=100)
+    limit: int = Field(default=6, ge=1, le=20)
+
+
+class FindingReviewOutput(BaseModel):
+    finding: str
+    case: str | None = None
+    signals: ResearchSignals
+    evidence_status: str
+    observed_evidence: list[str] = Field(default_factory=list)
+    missing_evidence: list[str] = Field(default_factory=list)
+    references: list[SearchResultItem] = Field(default_factory=list)
+    severity_guidance: list[SearchResultItem] = Field(default_factory=list)
+    note: str = ""
+
+
+class ReportDraftInput(BaseModel):
+    case: str = Field(min_length=1, max_length=200)
+    sources: list[str] | None = None
+    limit: int = Field(default=8, ge=1, le=20)
+
+
+class ReportDraftOutput(BaseModel):
+    case: str
+    title: str
+    summary: str
+    observed_evidence: list[str] = Field(default_factory=list)
+    reproduction_steps: list[str] = Field(default_factory=list)
+    impact: str
+    remediation: str
+    severity_basis: list[SearchResultItem] = Field(default_factory=list)
+    references: list[SearchResultItem] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+
+
+class KnowledgeSourceInput(BaseModel):
+    source: str | None = Field(default=None, max_length=100)
+
+
+class KnowledgeSourceStatus(BaseModel):
+    id: str
+    name: str
+    enabled: bool
+    authority: str
+    source_type: str
+    url: str | None = None
+    indexed_documents: int = 0
+    indexed_chunks: int = 0
+
+
+class KnowledgeSourcesOutput(BaseModel):
+    count: int
+    sources: list[KnowledgeSourceStatus] = Field(default_factory=list)
+    note: str = ""
+
+
+class KnowledgeCompareInput(BaseModel):
+    topic: str = Field(min_length=1, max_length=2000)
+    sources: list[str] = Field(min_length=2, max_length=10)
+    platform: str | None = Field(default=None, max_length=100)
+    limit: int = Field(default=4, ge=1, le=10)
+
+
+class KnowledgeCompareView(BaseModel):
+    source: str
+    source_name: str
+    authority: str
+    results: list[SearchResultItem] = Field(default_factory=list)
+
+
+class KnowledgeCompareOutput(BaseModel):
+    topic: str
+    sources_compared: list[str]
+    views: list[KnowledgeCompareView] = Field(default_factory=list)
+    shared_terms: list[str] = Field(default_factory=list)
+    note: str = ""
+
+
 # -- Phase 5: investigation context (local case layer) ----------------------
 
 CaseAction = Literal["create", "add", "update_observation", "get", "list", "export"]
