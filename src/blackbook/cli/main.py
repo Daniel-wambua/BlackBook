@@ -22,6 +22,7 @@ from typing import Optional
 
 import typer
 from rich.console import Console
+from rich.progress import BarColumn, Progress, TextColumn, TimeRemainingColumn
 from rich.table import Table
 
 from blackbook import ui
@@ -118,7 +119,35 @@ def _ingest_targets(settings, source, force, verbose, pdf_dir=None, rebuild_grap
         console.print(f"\n[bold cyan]Ingesting[/bold cyan] {src_cfg.name} ({src_cfg.id})")
         try:
             adapter = adapter_for(src_cfg, raw_dir=str(settings.raw_dir))
-            result = pipeline.run(adapter, force=force)
+            progress = None
+            progress_task = None
+            if src_cfg.type == "filesystem" and hasattr(adapter, "candidate_files"):
+                total_files = len(adapter.candidate_files(warn_oversized=False))
+                if total_files:
+                    progress = Progress(
+                        TextColumn("  {task.description}"),
+                        BarColumn(),
+                        TextColumn("{task.completed}/{task.total}"),
+                        TextColumn("{task.percentage:>5.1f}%"),
+                        TimeRemainingColumn(),
+                        console=console,
+                    )
+                    progress.start()
+                    progress_task = progress.add_task("", total=total_files)
+
+                    def on_pdf_progress(done, total, current):
+                        progress.update(
+                            progress_task,
+                            completed=done,
+                            description=current,
+                        )
+
+                    adapter.progress_callback = on_pdf_progress
+            try:
+                result = pipeline.run(adapter, force=force)
+            finally:
+                if progress is not None:
+                    progress.stop()
             st = result.stats
             total_chunks_written += st.chunks_written
             embed_note = (

@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Iterator
+from typing import Callable, Iterator
 
 import pymupdf
 
@@ -39,6 +39,34 @@ class PDFAdapter(SourceAdapter):
     def __init__(self, config: SourceConfig, raw_dir: str | None = None):
         super().__init__(config, raw_dir)
         self.directory = Path(config.directory) if config.directory else None
+        self.progress_callback: Callable[[int, int, str], None] | None = None
+
+    def candidate_files(self, *, warn_oversized: bool = True) -> list[Path]:
+        """Return eligible PDFs in stable order for progress reporting."""
+        if not self.directory or not self.directory.is_dir():
+            return []
+        base = self.directory.resolve()
+        glob = self.config.include_glob or "**/*.pdf"
+        files: list[Path] = []
+        for path in sorted(base.glob(glob)):
+            if not path.is_file() or not is_within(path, base):
+                continue
+            if path.suffix.lower() != ".pdf":
+                continue
+            if path.stat().st_size > self.config.max_document_bytes:
+                if warn_oversized:
+                    log.warning(
+                        "skipping oversized pdf: %s (%.0f MB exceeds the %.0f MB "
+                        "sources.local_pdfs.max_document_bytes limit)",
+                        path,
+                        path.stat().st_size / (1024 * 1024),
+                        self.config.max_document_bytes / (1024 * 1024),
+                    )
+                continue
+            files.append(path)
+            if self.config.max_files is not None and len(files) >= self.config.max_files:
+                break
+        return files
 
     # -- fetching ----------------------------------------------------------
 
@@ -53,36 +81,24 @@ class PDFAdapter(SourceAdapter):
         if not self.directory or not self.directory.is_dir():
             return
         base = self.directory.resolve()
-        glob = self.config.include_glob or "**/*.pdf"
-        max_files = self.config.max_files
+        candidate_paths = self.candidate_files()
         count = 0
-        for path in sorted(base.glob(glob)):
-            if max_files is not None and count >= max_files:
-                break
-            if not path.is_file():
-                continue
+        total = len(candidate_paths)
+        for path in candidate_paths:
+            count += 1
             # Enforce the directory boundary.
             if not is_within(path, base):
                 log.warning("skipping out-of-directory pdf: %s", path)
                 continue
-            if path.suffix.lower() != ".pdf":
-                continue
-            if path.stat().st_size > self.config.max_document_bytes:
-                log.warning(
-                    "skipping oversized pdf: %s (%.0f MB exceeds the %.0f MB "
-                    "sources.local_pdfs.max_document_bytes limit)",
-                    path,
-                    path.stat().st_size / (1024 * 1024),
-                    self.config.max_document_bytes / (1024 * 1024),
-                )
-                continue
-            count += 1
             try:
                 doc = self._parse_pdf(base, path)
                 if doc is not None:
                     yield doc
             except Exception as e:
                 log.warning("failed to parse pdf %s: %s", path, e)
+            finally:
+                if self.progress_callback:
+                    self.progress_callback(count, total, str(path.relative_to(base)))
 
     def _parse_pdf(self, base: Path, path: Path) -> ParsedDocument | None:
         reader = pymupdf.open(str(path))
