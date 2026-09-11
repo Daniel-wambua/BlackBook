@@ -33,8 +33,8 @@ or any MCP-compatible client.
 ```
                 CLAUDE / AI AGENT
                        |
-          +------------+------------+
-          |                         |
+     +------------+------------+
+     |                         |
           v                         v
       HEXSTRIKE              BlackBook MCP
       EXECUTION                   KNOWLEDGE
@@ -275,10 +275,15 @@ blackbook ingest                        # all enabled sources
 #   set `max_files: 25` on a source in config.yaml
 ```
 
-Re-running `ingest` is incremental; unchanged documents are skipped via content
-hash. Citation metadata (URLs, titles) is refreshed in place when it drifts, so
+`ingest` is incremental by default. For the normal daily workflow, use
+`blackbook update`: it checks every enabled source, downloads only changed
+GitHub revisions or missing cached pages, skips unchanged documents by content
+hash, prints `status=up-to-date` for sources with no changes, and continues if
+another source has an error. New sources are ingested normally on the same run.
+Use `blackbook ingest --force` only when you explicitly need a full refresh.
+Citation metadata (URLs, titles) is refreshed in place when it drifts, so
 a URL-mapping fix or a source re-publishing under new permalinks self-heals
-without re-chunking.
+without re-chunking or new chunk ids.
 
 ## PDF ingestion
 

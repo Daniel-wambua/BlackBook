@@ -129,6 +129,10 @@ def _ingest_targets(settings, source, force, verbose, pdf_dir=None, rebuild_grap
                 f"unchanged={st.skipped_unchanged} chunks={st.chunks_written}"
                 f"{embed_note} errors={st.errors}"
             )
+            if st.errors == 0 and st.discovered > 0 and st.parsed == 0:
+                console.print("  status=up-to-date (no source documents changed)")
+            elif st.errors == 0 and st.parsed > 0:
+                console.print(f"  status=updated ({st.parsed} document(s) changed)")
             if st.error_messages and verbose:
                 for m in st.error_messages[:10]:
                     err_console.print(f"    [yellow]{m}[/yellow]")
@@ -177,7 +181,7 @@ def ingest(
     no_graph: bool = typer.Option(False, "--no-graph", help="Skip the knowledge-graph rebuild after ingest"),
     verbose: bool = typer.Option(False, "--verbose", "-v"),
 ):
-    """Ingest one or all enabled knowledge sources."""
+    """Incrementally ingest one or all enabled sources; use --force for a full refresh."""
     settings = _setup(verbose)
     _ingest_targets(settings, source, force, verbose, pdf_dir=pdf_dir, rebuild_graph=not no_graph)
 
@@ -188,7 +192,7 @@ def update(
     no_graph: bool = typer.Option(False, "--no-graph", help="Skip the knowledge-graph rebuild after update"),
     verbose: bool = typer.Option(False, "--verbose", "-v"),
 ):
-    """Re-fetch sources and ingest only what changed (incremental)."""
+    """Check all enabled sources and ingest only new or changed material."""
     settings = _setup(verbose)
     # update == a non-forced ingest: fetch() refreshes, pipeline skips unchanged.
     _ingest_targets(settings, source, force=False, verbose=verbose, rebuild_graph=not no_graph)
