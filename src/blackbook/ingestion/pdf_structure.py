@@ -1,8 +1,8 @@
 """Structural analysis of PDF text.
 
-Uses pypdf's ``visitor_text`` hook to capture per-text-run font name and size,
-which lets us detect headings (larger font), code blocks (monospaced font), and
-emphasis with reasonable confidence — without a heavyweight layout engine.
+Uses PyMuPDF's structured text dictionary to capture per-span font name and
+size, which lets us detect headings (larger font), code blocks (monospaced
+font), and emphasis with reasonable confidence.
 
 Everything here is *heuristic* and is therefore tagged ``inferred`` by the
 caller; we only claim structure when the signal is strong enough.
@@ -45,26 +45,28 @@ def is_monospace(font: str) -> bool:
 
 
 def collect_page_runs(page) -> tuple[str, list[TextRun]]:
-    """Extract plain text and per-run font/size using pypdf visitor hooks.
+    """Extract plain text and per-span font/size using PyMuPDF.
 
     Returns the page's plain text and a list of :class:`TextRun`.
     """
     runs: list[TextRun] = []
 
-    def visitor(text, cm, tm, font_dict, font_size):
-        if not text or not text.strip():
-            return
-        font = ""
-        try:
-            if font_dict:
-                base = font_dict.get("/BaseFont")
-                if base:
-                    font = str(base).lstrip("/")
-        except Exception:
-            font = ""
-        runs.append(TextRun(text=text, font=font, size=float(font_size or 0.0)))
-
-    plain = page.extract_text(visitor_text=visitor) or ""
+    structured = page.get_text("dict")
+    for block in structured.get("blocks", []):
+        if block.get("type") != 0:
+            continue
+        for line in block.get("lines", []):
+            for span in line.get("spans", []):
+                text = span.get("text", "")
+                if text and text.strip():
+                    runs.append(
+                        TextRun(
+                            text=text,
+                            font=str(span.get("font", "")),
+                            size=float(span.get("size", 0.0) or 0.0),
+                        )
+                    )
+    plain = page.get_text("text") or ""
     return plain, runs
 
 

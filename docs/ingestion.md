@@ -145,7 +145,10 @@ with an empty body.
 
 * Only files inside the configured `directory` are read; path traversal out of it is
   rejected, and oversized files are skipped.
-* Text is extracted per page with `pypdf`. A `visitor_text` hook captures each text
+* PDF extraction uses PyMuPDF by default for fast, page-by-page processing and
+  font-aware spans. A page extraction failure yields an empty page instead of
+  aborting the whole document.
+* Text is extracted per page with PyMuPDF. Structured text spans expose each
   run's **font name and size**, which drives structural detection:
   * **Headings** — a run whose font is ≥1.15× the page's median body size, or that
     matches a numbered-section pattern (`1.`, `2.3`, …), becomes a section breadcrumb.

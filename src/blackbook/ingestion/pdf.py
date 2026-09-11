@@ -20,7 +20,7 @@ import logging
 from pathlib import Path
 from typing import Iterator
 
-from pypdf import PdfReader
+import pymupdf
 
 from blackbook.config import SourceConfig
 from blackbook.ingestion.base import ParsedDocument, SourceAdapter
@@ -85,13 +85,16 @@ class PDFAdapter(SourceAdapter):
                 log.warning("failed to parse pdf %s: %s", path, e)
 
     def _parse_pdf(self, base: Path, path: Path) -> ParsedDocument | None:
-        reader = PdfReader(str(path))
-        meta = self._extract_metadata(reader, path)
+        reader = pymupdf.open(str(path))
+        try:
+            meta = self._extract_metadata(reader, path)
 
-        # Structural analysis per page (font-aware heading/code detection).
-        pages: list[PageContent] = []
-        for i, page in enumerate(reader.pages, start=1):
-            pages.append(analyze_page(page, i))
+            # Structural analysis per page (font-aware heading/code detection).
+            pages: list[PageContent] = []
+            for i, page in enumerate(reader, start=1):
+                pages.append(analyze_page(page, i))
+        finally:
+            reader.close()
 
         if not any(p.text.strip() for p in pages):
             # Typically a scanned/image-only PDF: there is nothing to index
@@ -147,13 +150,13 @@ class PDFAdapter(SourceAdapter):
         return None if s.lower() in cls._BOILERPLATE else s
 
     @classmethod
-    def _extract_metadata(cls, reader: PdfReader, path: Path) -> dict:
-        meta = reader.metadata
+    def _extract_metadata(cls, reader: pymupdf.Document, path: Path) -> dict:
+        meta = reader.metadata or {}
         title = author = subject = None
         if meta:
-            title = cls._clean(getattr(meta, "title", None))
-            author = cls._clean(getattr(meta, "author", None))
-            subject = cls._clean(getattr(meta, "subject", None))
+            title = cls._clean(meta.get("title"))
+            author = cls._clean(meta.get("author"))
+            subject = cls._clean(meta.get("subject"))
         title_inferred = title is None
         if title is None:
             title = path.stem
