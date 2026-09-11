@@ -158,13 +158,16 @@ source chunk.
 
 ## Features (current phase)
 
-* **Source-grounded search** across 21 default sources: HackTricks, 0xdf
+* **Source-grounded search** across 25 configured sources (25 enabled by
+  default): HackTricks, 0xdf
   writeups, MITRE ATT&CK, GTFOBins, LOLBAS, LOOBins, WADComs,
   PayloadsAllTheThings, The Hacker Recipes, Internal All The Things,
   Moamen Basel's HTB writeups, local PDFs, OWASP WSTG, OWASP ASVS,
   OWASP API Security, the Bug Bounty Cheatsheet, PortSwigger Academy,
-  Google Bug Hunters, HackerOne Hacktivity, Bugcrowd VRT, and GitHub Security
-  Lab research
+  Google Bug Hunters, Bugcrowd VRT, GitHub Security Lab research, Hacker101,
+  and four public HackerOne report/index repositories. Report archives are
+  labeled with unknown authority and should be treated as local research data,
+  not official HackerOne guidance.
 * **Exact, verifiable citations**: every reference resolves to real indexed text
 * **Structure-preserving chunking**: heading breadcrumbs and code blocks intact
 * **Hybrid retrieval facade** with reranking + source diversity: lexical (FTS5
@@ -235,8 +238,8 @@ retrieval:
   per_document_cap: 2              # source diversity
 ```
 
-Twenty-one sources are registered by default (run `blackbook sources` to list
-them). Website sources are bounded to their configured origin and optional
+Twenty-five sources are configured and enabled by default (run `blackbook sources`
+to list them). Website sources are bounded to their configured origin and optional
 `path_prefix`; they skip non-HTML assets and respect `max_files`,
 `max_document_bytes`, and `request_delay`.
 GitHub-backed sources accept a few extra keys: `ref` (branch), `include_glob`
@@ -266,9 +269,13 @@ blackbook ingest --source owasp_api_security # OWASP API security guidance
 blackbook ingest --source bugbounty_cheatsheet # practical bug bounty workflow
 blackbook ingest --source portswigger       # Web Security Academy guidance
 blackbook ingest --source google_bug_hunters # Google bug bounty guidance
-blackbook ingest --source hackerone_hacktivity # public disclosure case studies
 blackbook ingest --source bugcrowd_vrt      # vulnerability severity taxonomy
 blackbook ingest --source github_security_lab # GitHub Security Lab research
+blackbook ingest --source hacker101         # HackerOne educational material
+blackbook ingest --source hackerone_reports_index # report index
+blackbook ingest --source hackerone_disclosed_reports # report bodies
+blackbook ingest --source hackerone_reports_metadata # report metadata
+blackbook ingest --source hackerone_bug_bounty_reports # report index
 blackbook ingest                        # all enabled sources
 
 # bound the size during a first run:

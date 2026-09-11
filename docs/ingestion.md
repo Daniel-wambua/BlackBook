@@ -35,12 +35,22 @@ Add a future source by subclassing `SourceAdapter` (or, for a GitHub repo,
 `GithubTarballAdapter`) and registering it in
 `blackbook/ingestion/__init__.py:ADAPTER_REGISTRY`. Unregistered `git`-type
 sources fall back to the generic GitHub-markdown adapter, `website` sources to
-the bounded website adapter, and `filesystem` sources to the PDF adapter.
+the bounded website adapter, `rss` sources to the feed adapter, and
+`filesystem` sources to the PDF adapter.
 
 Generic website sources follow links from the configured URL, stay on the same
 origin, optionally stay below `path_prefix`, skip non-HTML assets, cache pages
 under the configured raw directory, and respect `max_files`,
-`max_document_bytes`, and `request_delay`.
+`max_document_bytes`, and `request_delay`. GitHub sources may use
+comma-separated `include_glob` patterns such as `**/*.md,**/*.txt`.
+
+Sources with an official RSS/Atom feed can use `type: rss` and `feed_url`.
+Feed validators are cached and conditional requests are used when the server
+supports them. The repository
+sources `hacker101`, `hackerone_reports_index`, `hackerone_disclosed_reports`,
+`hackerone_reports_metadata`, and `hackerone_bug_bounty_reports` provide the
+available public educational, report-index, metadata, and disclosed-report
+material instead.
 
 ## GitHub sources (generic)
 

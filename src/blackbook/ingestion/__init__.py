@@ -13,6 +13,7 @@ from blackbook.ingestion.loobins import LooBinsAdapter
 from blackbook.ingestion.wadcoms import WadcomsAdapter
 from blackbook.ingestion.attack import MitreAttackAdapter
 from blackbook.ingestion.website import WebsiteAdapter
+from blackbook.ingestion.rss import RssAdapter
 
 ADAPTER_REGISTRY = {
     "hacktricks": HackTricksAdapter,
@@ -26,9 +27,8 @@ ADAPTER_REGISTRY = {
     "wadcoms": WadcomsAdapter,
     "attack": MitreAttackAdapter,
     "portswigger": WebsiteAdapter,
-    "google_bug_hunters": WebsiteAdapter,
-    "hackerone_hacktivity": WebsiteAdapter,
-    "github_security_lab": WebsiteAdapter,
+    "google_bug_hunters": RssAdapter,
+    "github_security_lab": RssAdapter,
 }
 
 
@@ -37,7 +37,8 @@ def adapter_for(source_config, raw_dir: str | None = None) -> SourceAdapter:
 
     Falls back to matching by ``type`` when no id-specific adapter exists, so
     future sources can reuse adapters (e.g. a new "filesystem" source uses the
-    PDF adapter shape, a new GitHub-markdown source uses the generic adapter).
+    PDF adapter shape, a new GitHub-markdown source uses the generic adapter,
+    or a feed-backed source uses the RSS adapter).
     """
     cls = ADAPTER_REGISTRY.get(source_config.id)
     if cls is None:
@@ -45,6 +46,7 @@ def adapter_for(source_config, raw_dir: str | None = None) -> SourceAdapter:
             "filesystem": PDFAdapter,
             "git": GithubMarkdownAdapter,
             "website": WebsiteAdapter,
+                "rss": RssAdapter,
         }
         cls = by_type.get(source_config.type)
     if cls is None:
@@ -69,5 +71,6 @@ __all__ = [
     "WadcomsAdapter",
     "MitreAttackAdapter",
     "WebsiteAdapter",
+    "RssAdapter",
     "adapter_for",
 ]

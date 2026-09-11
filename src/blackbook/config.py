@@ -39,14 +39,16 @@ class SourceConfig(BaseModel):
     name: str
     enabled: bool = True
     # "git" (clone + parse), "website" (crawl/scrape), "filesystem" (local files)
-    type: Literal["git", "website", "filesystem"] = "filesystem"
+    type: Literal["git", "website", "filesystem", "rss"] = "filesystem"
     # Source authority affects ranking weight and how results are presented.
     authority: Literal["official", "trusted", "user", "unknown"] = "unknown"
     # Optional category tags propagated to every chunk from this source.
     categories: list[str] = Field(default_factory=list)
 
-    # git / website sources
+    # git / website / RSS sources
     url: str | None = None
+    # Optional RSS/Atom endpoint for a feed-backed source.
+    feed_url: str | None = None
     ref: str | None = None  # git branch/tag/commit
     # Base URL of the published site for GitHub-markdown sources. When set,
     # page URLs map under it; when unset, URLs point at the GitHub blob page.
@@ -59,7 +61,8 @@ class SourceConfig(BaseModel):
     # filesystem sources
     directory: str | None = None
     # "" = adapter default ("**/*.pdf" for filesystem, "**/*.md" for
-    # GitHub-markdown sources)
+    # GitHub-markdown sources). GitHub sources may provide comma-separated
+    # patterns, for example "**/*.md,**/*.txt".
     include_glob: str = ""
     # Comma-separated glob patterns (fnmatch semantics, "/"-separated
     # repo-relative paths) for files to skip even when include_glob matches.
@@ -327,21 +330,11 @@ def _default_sources() -> list[SourceConfig]:
             id="google_bug_hunters",
             name="Google Bug Hunters",
             enabled=True,
-            type="website",
+            type="rss",
             authority="trusted",
             url="https://bughunters.google.com/learn",
-            path_prefix="/learn",
-            max_files=250,
-        ),
-        SourceConfig(
-            id="hackerone_hacktivity",
-            name="HackerOne Hacktivity",
-            enabled=True,
-            type="website",
-            authority="user",
-            url="https://hackerone.com/hacktivity",
-            path_prefix="/hacktivity",
-            max_files=250,
+            feed_url="https://bughunters.google.com/feed/en",
+            max_files=100,
         ),
         SourceConfig(
             id="bugcrowd_vrt",
@@ -356,11 +349,63 @@ def _default_sources() -> list[SourceConfig]:
             id="github_security_lab",
             name="GitHub Security Lab Research",
             enabled=True,
-            type="website",
+            type="rss",
             authority="trusted",
-            url="https://securitylab.github.com/research/",
-            path_prefix="/research",
-            max_files=250,
+            url="https://github.blog/tag/github-security-lab/",
+            feed_url="https://github.blog/tag/github-security-lab/feed/",
+            max_files=100,
+        ),
+        SourceConfig(
+            id="hacker101",
+            name="Hacker101 (HackerOne)",
+            enabled=True,
+            type="git",
+            authority="trusted",
+            url="https://github.com/Hacker0x01/hacker101.git",
+            ref="master",
+            categories=["bug-bounty", "hackerone", "education"],
+        ),
+        SourceConfig(
+            id="hackerone_reports_index",
+            name="HackerOne Reports Index",
+            enabled=True,
+            type="git",
+            authority="unknown",
+            url="https://github.com/reddelexc/hackerone-reports.git",
+            ref="master",
+            categories=["bug-bounty", "hackerone", "report-index"],
+        ),
+        SourceConfig(
+            id="hackerone_disclosed_reports",
+            name="HackerOne Disclosed Reports",
+            enabled=True,
+            type="git",
+            authority="unknown",
+            url="https://github.com/ajaysenr/HackerOne-Disclosed-Reports.git",
+            ref="main",
+            content_root="reports",
+            categories=["bug-bounty", "hackerone", "disclosed-report"],
+        ),
+        SourceConfig(
+            id="hackerone_reports_metadata",
+            name="HackerOne Reports Metadata",
+            enabled=True,
+            type="git",
+            authority="unknown",
+            url="https://github.com/aldaor/HackerOneReports.git",
+            ref="master",
+            include_glob="**/*.txt",
+            categories=["bug-bounty", "hackerone", "report-metadata"],
+        ),
+        SourceConfig(
+            id="hackerone_bug_bounty_reports",
+            name="HackerOne Bug Bounty Reports",
+            enabled=True,
+            type="git",
+            authority="unknown",
+            url="https://github.com/codebygk/hackerone-bug-bounty-reports.git",
+            ref="master",
+            categories=["bug-bounty", "hackerone", "report-index"],
         ),
     ]
 

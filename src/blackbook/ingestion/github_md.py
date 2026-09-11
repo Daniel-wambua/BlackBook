@@ -73,10 +73,17 @@ class GithubMarkdownAdapter(GithubTarballAdapter):
                 log.warning("failed to parse %s: %s", path, e)
 
     def _iter_markdown(self, root: Path) -> Iterator[Path]:
-        glob = self.config.include_glob or "**/*.md"
+        globs = [
+            pattern.strip()
+            for pattern in (self.config.include_glob or "**/*.md").split(",")
+            if pattern.strip()
+        ]
         content_root = (self.config.content_root or "").strip("/")
         excludes = self._exclude_patterns()
-        for path in root.glob(glob):
+        matched: set[Path] = set()
+        for glob in globs:
+            matched.update(root.glob(glob))
+        for path in sorted(matched):
             rel = path.relative_to(root)
             # Skip non-content directories.
             if any(part in SKIP_DIRS for part in rel.parts):
@@ -130,7 +137,7 @@ class GithubMarkdownAdapter(GithubTarballAdapter):
         front_matter, body = self._split_front_matter(raw)
         rel = self._rel_to_repo(root, path)
         external_id = str(rel)
-        categories = self._category_from_path(root, path)
+        categories = list(self.config.categories) + self._category_from_path(root, path)
         title = self._extract_title(body) or self._fallback_title(path, root)
         url = self._source_url(root, path, front_matter=front_matter)
         chunks = chunk_markdown(body, title_path=categories + [title])

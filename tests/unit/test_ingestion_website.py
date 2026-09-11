@@ -15,16 +15,34 @@ def test_website_sources_are_registered_and_scoped():
         "bugbounty_cheatsheet",
         "portswigger",
         "google_bug_hunters",
-        "hackerone_hacktivity",
         "bugcrowd_vrt",
         "github_security_lab",
+        "hacker101",
+        "hackerone_reports_index",
+        "hackerone_disclosed_reports",
+        "hackerone_reports_metadata",
+        "hackerone_bug_bounty_reports",
     }
     assert expected <= set(by_id)
     assert by_id["portswigger"].path_prefix == "/web-security"
-    assert by_id["google_bug_hunters"].path_prefix == "/learn"
-    assert by_id["github_security_lab"].path_prefix == "/research"
+    assert by_id["google_bug_hunters"].feed_url == "https://bughunters.google.com/feed/en"
+    assert by_id["github_security_lab"].feed_url == "https://github.blog/tag/github-security-lab/feed/"
     assert isinstance(adapter_for(by_id["portswigger"]), WebsiteAdapter)
     assert ADAPTER_REGISTRY["portswigger"] is WebsiteAdapter
+    assert by_id["hackerone_disclosed_reports"].content_root == "reports"
+    assert by_id["hackerone_reports_metadata"].include_glob == "**/*.txt"
+
+
+def test_feed_backed_sources_use_rss_adapter():
+    from blackbook.ingestion.rss import RssAdapter
+
+    settings = Settings()
+    for source_id in ("google_bug_hunters", "github_security_lab"):
+        source = settings.get_source(source_id)
+        assert source is not None
+        assert source.type == "rss"
+        assert source.feed_url
+        assert isinstance(adapter_for(source), RssAdapter)
 
 
 def test_website_adapter_rejects_external_and_out_of_scope_links(tmp_path: Path):

@@ -176,20 +176,11 @@ sources:
   - id: google_bug_hunters
     name: Google Bug Hunters
     enabled: true
-    type: website
+    type: rss
     authority: trusted
     url: https://bughunters.google.com/learn
-    path_prefix: /learn
-    max_files: 250
-
-  - id: hackerone_hacktivity
-    name: HackerOne Hacktivity
-    enabled: true
-    type: website
-    authority: user
-    url: https://hackerone.com/hacktivity
-    path_prefix: /hacktivity
-    max_files: 250
+    feed_url: https://bughunters.google.com/feed/en
+    max_files: 100
 
   - id: bugcrowd_vrt
     name: Bugcrowd Vulnerability Rating Taxonomy
@@ -202,11 +193,115 @@ sources:
   - id: github_security_lab
     name: GitHub Security Lab Research
     enabled: true
-    type: website
+    type: rss
     authority: trusted
-    url: https://securitylab.github.com/research/
-    path_prefix: /research
-    max_files: 250
+    url: https://github.blog/tag/github-security-lab/
+    feed_url: https://github.blog/tag/github-security-lab/feed/
+    max_files: 100
+
+  # Public HackerOne educational material and disclosed-report archives.
+  # Report archives have no declared repository license; review provenance and
+  # redistribution terms before using them outside your local knowledge base.
+  - id: hacker101
+    name: Hacker101 (HackerOne)
+    enabled: true
+    type: git
+    authority: trusted
+    url: https://github.com/Hacker0x01/hacker101.git
+    ref: master
+    categories: [bug-bounty, hackerone, education]
+
+  - id: hackerone_reports_index
+    name: HackerOne Reports Index
+    enabled: true
+    type: git
+    authority: unknown
+    url: https://github.com/reddelexc/hackerone-reports.git
+    ref: master
+    categories: [bug-bounty, hackerone, report-index]
+
+  - id: hackerone_disclosed_reports
+    name: HackerOne Disclosed Reports
+    enabled: true
+    type: git
+    authority: unknown
+    url: https://github.com/ajaysenr/HackerOne-Disclosed-Reports.git
+    ref: main
+    content_root: reports
+    categories: [bug-bounty, hackerone, disclosed-report]
+
+  - id: hackerone_reports_metadata
+    name: HackerOne Reports Metadata
+    enabled: true
+    type: git
+    authority: unknown
+    url: https://github.com/aldaor/HackerOneReports.git
+    ref: master
+    include_glob: "**/*.txt"
+    categories: [bug-bounty, hackerone, report-metadata]
+
+  - id: hackerone_bug_bounty_reports
+    name: HackerOne Bug Bounty Reports
+    enabled: true
+    type: git
+    authority: unknown
+    url: https://github.com/codebygk/hackerone-bug-bounty-reports.git
+    ref: master
+    categories: [bug-bounty, hackerone, report-index]
+
+  # Public HackerOne educational material and disclosed-report archives.
+  # Report archives have no declared repository license; review provenance and
+  # redistribution terms before using them outside your local knowledge base.
+  - id: hacker101
+    name: Hacker101 (HackerOne)
+    enabled: true
+    type: git
+    authority: trusted
+    url: https://github.com/Hacker0x01/hacker101.git
+    ref: main
+    include_glob: "**/*.md"
+    categories: [bug-bounty, hackerone, education]
+
+  - id: hackerone_reports_index
+    name: HackerOne Reports Index
+    enabled: true
+    type: git
+    authority: unknown
+    url: https://github.com/reddelexc/hackerone-reports.git
+    ref: master
+    include_glob: "**/*.md"
+    categories: [bug-bounty, hackerone, report-index]
+
+  - id: hackerone_disclosed_reports
+    name: HackerOne Disclosed Reports
+    enabled: true
+    type: git
+    authority: unknown
+    url: https://github.com/ajaysenr/HackerOne-Disclosed-Reports.git
+    ref: main
+    include_glob: "**/*.md"
+    content_root: reports
+    categories: [bug-bounty, hackerone, disclosed-report]
+
+  - id: hackerone_reports_metadata
+    name: HackerOne Reports Metadata
+    enabled: true
+    type: git
+    authority: unknown
+    url: https://github.com/aldaor/HackerOneReports.git
+    ref: main
+    include_glob: "**/*.txt"
+    categories: [bug-bounty, hackerone, report-metadata]
+
+  - id: hackerone_bug_bounty_reports
+    name: HackerOne Bug Bounty Reports
+    enabled: true
+    type: git
+    authority: unknown
+    url: https://github.com/codebygk/hackerone-bug-bounty-reports.git
+    ref: main
+    include_glob: "**/*.md"
+    categories: [bug-bounty, hackerone, report-index]
 
   # MITRE ATT&CK enterprise STIX bundle (official; ~54 MB download).
   # Ingesting it lets knowledge_technique return official tactics, platforms,
