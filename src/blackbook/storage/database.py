@@ -277,6 +277,34 @@ class Database:
         ).fetchall()
         return [dict(r) for r in rows]
 
+    def chunk_hashes(
+        self,
+        source_ids: list[str] | None = None,
+        exclude_source_ids: list[str] | None = None,
+        exclude_doc_id: int | None = None,
+    ) -> set[str]:
+        """Return normalized chunk hashes, optionally scoped by source."""
+        conditions: list[str] = []
+        params: list[object] = []
+        if source_ids:
+            placeholders = ",".join("?" for _ in source_ids)
+            conditions.append(f"d.source_id IN ({placeholders})")
+            params.extend(source_ids)
+        if exclude_source_ids:
+            placeholders = ",".join("?" for _ in exclude_source_ids)
+            conditions.append(f"d.source_id NOT IN ({placeholders})")
+            params.extend(exclude_source_ids)
+        if exclude_doc_id is not None:
+            conditions.append("c.doc_id != ?")
+            params.append(exclude_doc_id)
+        where = f" WHERE {' AND '.join(conditions)}" if conditions else ""
+        rows = self.conn.execute(
+            "SELECT c.content_hash FROM chunks c "
+            "JOIN documents d ON d.doc_id = c.doc_id" + where,
+            params,
+        ).fetchall()
+        return {str(row["content_hash"]) for row in rows}
+
     # -- chunks -----------------------------------------------------------
 
     def _bump_embeddings_version(self) -> None:

@@ -100,6 +100,31 @@ def test_repo_slug_rejects_bad_url():
         adapter._repo_slug()
 
 
+def test_tarball_extraction_skips_non_indexable_assets(tmp_path):
+    import io
+    import tarfile
+
+    from blackbook.config import SourceConfig
+
+    adapter = _adapter(FIXTURES / "github_recipes")
+    payload = io.BytesIO()
+    with tarfile.open(fileobj=payload, mode="w:gz") as archive:
+        for name, data in {
+            "repo/docs/page.md": b"# page",
+            "repo/assets/image.pdf": b"pdf",
+            "repo/images/logo.png": b"png",
+        }.items():
+            info = tarfile.TarInfo(name)
+            info.size = len(data)
+            archive.addfile(info, io.BytesIO(data))
+    destination = tmp_path / "extract"
+    destination.mkdir()
+    adapter._safe_extract(payload.getvalue(), destination)
+    assert (destination / "repo/docs/page.md").is_file()
+    assert not (destination / "repo/assets/image.pdf").exists()
+    assert not (destination / "repo/images/logo.png").exists()
+
+
 def test_htb_writeups_permalink_and_exclude_glob():
     adapter = _adapter(
         FIXTURES / "github_htb",

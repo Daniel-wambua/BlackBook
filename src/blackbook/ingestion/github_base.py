@@ -15,6 +15,7 @@ from __future__ import annotations
 import io
 import logging
 import tarfile
+import tempfile
 from pathlib import Path
 
 import httpx
@@ -88,8 +89,11 @@ class GithubTarballAdapter(SourceAdapter):
         log.info(
             "[%s] downloading tarball (latest=%s)", self.source_id, (latest or "?")[:12]
         )
-        tarball = self._download_tarball()
-        self._safe_extract(tarball, workdir)
+        tarball_path = self._download_tarball_file()
+        try:
+            self._safe_extract(tarball_path, workdir)
+        finally:
+            tarball_path.unlink(missing_ok=True)
         self._extract_root = self._find_extract_root(workdir)
         if latest:
             marker.write_text(latest)
@@ -119,11 +123,40 @@ class GithubTarballAdapter(SourceAdapter):
                 r.raise_for_status()
                 return r.read()
 
-    def _safe_extract(self, tarball: bytes, dest: Path) -> None:
+    def _download_tarball_file(self) -> Path:
+        """Stream a tarball to disk so large repositories stay memory-bounded."""
+        owner, repo = self._repo_slug()
+        url = (
+            f"https://codeload.github.com/{owner}/{repo}"
+            f"/tar.gz/refs/heads/{self._ref()}"
+        )
+        tmp = tempfile.NamedTemporaryFile(prefix="blackbook-", suffix=".tar.gz", delete=False)
+        path = Path(tmp.name)
+        try:
+            with tmp, httpx.Client(timeout=300.0, follow_redirects=True) as client:
+                with client.stream("GET", url) as response:
+                    response.raise_for_status()
+                    for block in response.iter_bytes(1024 * 1024):
+                        tmp.write(block)
+            return path
+        except Exception:
+            path.unlink(missing_ok=True)
+            raise
+
+    def _safe_extract(self, tarball: bytes | Path, dest: Path) -> None:
         """Extract the tarball, refusing any member that escapes ``dest``."""
         dest_resolved = dest.resolve()
-        with tarfile.open(fileobj=io.BytesIO(tarball), mode="r:gz") as tf:
+        if isinstance(tarball, Path):
+            archive = tarfile.open(name=str(tarball), mode="r:gz")
+        else:
+            archive = tarfile.open(fileobj=io.BytesIO(tarball), mode="r:gz")
+        with archive as tf:
             for member in tf.getmembers():
+                member_path = Path(member.name)
+                if any(part in SKIP_DIRS for part in member_path.parts):
+                    continue
+                if member_path.suffix.lower() in SKIP_SUFFIXES:
+                    continue
                 # Zip-slip / path traversal protection.
                 target = (dest_resolved / member.name).resolve()
                 if not is_within(target, dest_resolved):

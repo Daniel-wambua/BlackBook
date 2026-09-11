@@ -30,6 +30,8 @@ Registered adapters:
 | `internal_all_the_things` | `GithubMarkdownAdapter` | git | AD/internal-network cheat sheets (MkDocs, `docs/` subtree); config-only source via the git-type fallback |
 | `htb_writeups` | `GithubMarkdownAdapter` | git | Moamen Basel's HTB writeups + cheatsheets (Jekyll); config-only source via the git-type fallback |
 | `website` sources | `WebsiteAdapter` | website | Bounded same-origin HTML crawling for configured documentation and disclosure pages; optional `path_prefix` prevents unrelated-site crawling |
+| `rss` sources | `RssAdapter` | rss | Conditional RSS/Atom feed ingestion with cached validators |
+| `webhacklist` | `GithubMarkdownAdapter` | git | Full WebHackList Markdown archive with exact cross-document deduplication |
 
 Add a future source by subclassing `SourceAdapter` (or, for a GitHub repo,
 `GithubTarballAdapter`) and registering it in
@@ -43,6 +45,13 @@ origin, optionally stay below `path_prefix`, skip non-HTML assets, cache pages
 under the configured raw directory, and respect `max_files`,
 `max_document_bytes`, and `request_delay`. GitHub sources may use
 comma-separated `include_glob` patterns such as `**/*.md,**/*.txt`.
+Sources that set `deduplicate_chunks: true` skip exact normalized chunk copies
+already present anywhere in the corpus while retaining the first citation.
+
+WebHackList uses this mode and indexes all Markdown files in the repository,
+including yearly technique lists, archived reference Markdown, and evaluation
+notes. PDFs and other binary assets are intentionally skipped by the GitHub
+extractor because the Markdown is the searchable source material.
 
 Sources with an official RSS/Atom feed can use `type: rss` and `feed_url`.
 Feed validators are cached and conditional requests are used when the server
@@ -58,10 +67,11 @@ All GitHub-backed sources share `GithubTarballAdapter`'s fetch mechanics:
 
 * Downloaded as a **tarball over HTTPS** (`codeload.github.com`), never via
   shell or git execution.
+* Large tarballs stream to a temporary file instead of being held in memory.
 * Change detection queries the latest commit SHA and skips re-download when
   current.
 * Tarball extraction is hardened against zip-slip/path traversal and skips
-  device files and links.
+  device files, links, images, PDFs, and configured non-content directories.
 
 Parsing is per-source. `GithubMarkdownAdapter` walks markdown files and is
 configuration-driven, so most new markdown sources need no code:
@@ -78,6 +88,10 @@ configuration-driven, so most new markdown sources need no code:
   carries a Jekyll `permalink` in its front matter, that permalink wins over
   the path-derived URL — it is the author's canonical link and can differ
   from the file path in case or shape.
+* `categories` — source-level tags copied into every document, useful for
+  separating educational material, report indexes, and archive content.
+* `deduplicate_chunks` — when true, exact normalized chunk copies already in
+  the corpus are skipped while preserving the first source citation.
 
 GTFOBins and LOLBAS render their YAML corpora to structured markdown instead:
 one document per binary, every abuse function/command preserved with the

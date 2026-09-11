@@ -249,6 +249,18 @@ sources:
     ref: master
     categories: [bug-bounty, hackerone, report-index]
 
+  - id: webhacklist
+    name: WebHackList
+    enabled: true
+    type: git
+    authority: trusted
+    url: https://github.com/irsdl/webhacklist.git
+    ref: master
+    include_glob: "**/*.md"
+    site_url: https://webhacklist.com
+    deduplicate_chunks: true
+    categories: [web-security, research, webhacklist]
+
   # Public HackerOne educational material and disclosed-report archives.
   # Report archives have no declared repository license; review provenance and
   # redistribution terms before using them outside your local knowledge base.

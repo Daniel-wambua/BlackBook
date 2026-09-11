@@ -68,6 +68,9 @@ class SourceConfig(BaseModel):
     # repo-relative paths) for files to skip even when include_glob matches.
     # Use to drop repo plumbing or link-index files from a GitHub source.
     exclude_glob: str = ""
+    # When true, exact normalized chunk duplicates already present in the
+    # corpus are skipped while preserving the first source's provenance.
+    deduplicate_chunks: bool = False
 
     # Fetch limits (security / cost control)
     max_files: int | None = None
@@ -406,6 +409,19 @@ def _default_sources() -> list[SourceConfig]:
             url="https://github.com/codebygk/hackerone-bug-bounty-reports.git",
             ref="master",
             categories=["bug-bounty", "hackerone", "report-index"],
+        ),
+        SourceConfig(
+            id="webhacklist",
+            name="WebHackList",
+            enabled=True,
+            type="git",
+            authority="trusted",
+            url="https://github.com/irsdl/webhacklist.git",
+            ref="master",
+            include_glob="**/*.md",
+            site_url="https://webhacklist.com",
+            deduplicate_chunks=True,
+            categories=["web-security", "research", "webhacklist"],
         ),
     ]
 

@@ -28,3 +28,13 @@ def test_github_adapter_supports_multiple_globs_and_source_categories(tmp_path: 
     documents = list(adapter.iter_documents())
     assert {document.external_id for document in documents} == {"guide.md", "report.txt"}
     assert all(document.categories[:2] == ["bug-bounty", "hackerone"] for document in documents)
+
+
+def test_webhacklist_is_full_markdown_source_with_cross_document_dedup():
+    from blackbook.config import Settings
+
+    source = Settings().get_source("webhacklist")
+    assert source is not None
+    assert source.include_glob == "**/*.md"
+    assert source.deduplicate_chunks is True
+    assert source.categories == ["web-security", "research", "webhacklist"]

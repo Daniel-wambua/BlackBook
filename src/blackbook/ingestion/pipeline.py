@@ -45,6 +45,7 @@ class IngestionPipeline:
     def __init__(self, db: Database, embedder=None):
         self.db = db
         self.embedder = embedder
+        self._dedup_hashes: set[str] | None = None
 
     def run(self, adapter: SourceAdapter, force: bool = False) -> PipelineResult:
         result = PipelineResult(source_id=adapter.source_id)
@@ -52,6 +53,14 @@ class IngestionPipeline:
 
         log.info("[%s] fetching source material", adapter.source_id)
         adapter.fetch(force=force)
+        self._dedup_hashes = None
+        if adapter.config.deduplicate_chunks:
+            # Load the external corpus once. Chunks from this source are
+            # excluded so incremental re-ingestion can replace its documents;
+            # duplicates within the source are collapsed as the run proceeds.
+            self._dedup_hashes = self.db.chunk_hashes(
+                exclude_source_ids=[adapter.source_id]
+            )
 
         for parsed in adapter.iter_documents():
             stats.discovered += 1
@@ -124,11 +133,15 @@ class IngestionPipeline:
             # Dedup within a document on *normalized* hash so re-formatted
             # copies (whitespace/casing/punctuation differences) also collapse.
             seen_hashes: set[str] = set()
+            if self._dedup_hashes is not None:
+                seen_hashes.update(self._dedup_hashes)
             for rc in raw_chunks:
                 chash = normalized_hash(rc.text)
                 if chash in seen_hashes:
                     continue
                 seen_hashes.add(chash)
+                if self._dedup_hashes is not None:
+                    self._dedup_hashes.add(chash)
                 chunk_rows.append(
                     Chunk(
                         doc_id=doc_id,
