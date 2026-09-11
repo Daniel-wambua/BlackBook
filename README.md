@@ -3,7 +3,7 @@
 <img src="assets/blackbook-mcp-final-refined.png" alt="BlackBook MCP Logo" width="220" style="margin-bottom: 20px;"/>
 
 # BlackBook MCP v0.8.0
-### Source-Grounded Cybersecurity Knowledge & Research MCP
+### Source-Grounded Cybersecurity and bugbounty Knowledge & Research MCP
 
 [![Version](https://img.shields.io/badge/version-0.8.0-22d3ee?style=flat-square)](#)
 [![Python](https://img.shields.io/badge/python-3.10%2B-3776AB?style=flat-square&logo=python&logoColor=white)](https://www.python.org/)
