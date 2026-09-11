@@ -49,7 +49,7 @@ def build_server(settings=None, db: Database | None = None) -> FastMCP:
     mcp = FastMCP(
         name="blackbook",
         instructions=(
-            "BlackBook is a source-grounded cybersecurity knowledge server. "
+            "BlackBook is a source-grounded cybersecurity and bug bounty knowledge server. "
             "Use knowledge_search to find documented techniques and similar cases, "
             "knowledge_technique for a structured, graph-enriched dossier on a "
             "technique, knowledge_case_search to find similar hands-on writeups, "
@@ -176,8 +176,8 @@ def build_server(settings=None, db: Database | None = None) -> FastMCP:
     @mcp.tool(
         name="knowledge_search",
         description=(
-            "Search the indexed cybersecurity knowledge corpus (HackTricks, 0xdf "
-            "writeups, local PDFs). Returns concise, ranked results with exact "
+            "Search the indexed cybersecurity and bug bounty knowledge corpus. "
+            "Returns concise, ranked results with exact "
             "source references (chunk_id/doc_id/url/page/section) that can be "
             "resolved with knowledge_source. ``sources``, ``platform`` and "
             "``categories`` are hard filters: results only come from matching "

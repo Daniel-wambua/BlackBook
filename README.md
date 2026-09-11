@@ -10,8 +10,8 @@
 [![Protocol](https://img.shields.io/badge/protocol-MCP-6b6bec?style=flat-square)](https://modelcontextprotocol.io/)
 [![MCP Tools](https://img.shields.io/badge/MCP%20tools-6-2ea043?style=flat-square)](#available-mcp-tools)
 [![Retrieval](https://img.shields.io/badge/retrieval-FTS5%20%2B%20Semantic-22b8f0?style=flat-square)](#retrieval-architecture)
-[![Sources](https://img.shields.io/badge/sources-HackTricks%2C%200xdf%2C%20ATT%26CK%2C%20GTFOBins%2C%20LOLBAS%2C%20PDFs%2C%20more-8957e5?style=flat-square)](#what-it-is)
-[![Tests](https://img.shields.io/badge/tests-250%20passing-3fb950?style=flat-square)](#testing)
+[![Sources](https://img.shields.io/badge/sources-21%20default%20sources-8957e5?style=flat-square)](#what-it-is)
+[![Tests](https://img.shields.io/badge/tests-257%20passing-3fb950?style=flat-square)](#testing)
 [![Status](https://img.shields.io/badge/status-alpha-f59e0b?style=flat-square)](#roadmap)
 [![License](https://img.shields.io/badge/license-MIT-8f5be8?style=flat-square)](LICENSE)
 [![Read only](https://img.shields.io/badge/read%20only-no%20execution-eab308?style=flat-square)](#security-model)
@@ -158,10 +158,13 @@ source chunk.
 
 ## Features (current phase)
 
-* **Source-grounded search** across 12 built-in sources: HackTricks, 0xdf
+* **Source-grounded search** across 21 default sources: HackTricks, 0xdf
   writeups, MITRE ATT&CK, GTFOBins, LOLBAS, LOOBins, WADComs,
   PayloadsAllTheThings, The Hacker Recipes, Internal All The Things,
-  Moamen Basel's HTB writeups, and local PDFs
+  Moamen Basel's HTB writeups, local PDFs, OWASP WSTG, OWASP ASVS,
+  OWASP API Security, the Bug Bounty Cheatsheet, PortSwigger Academy,
+  Google Bug Hunters, HackerOne Hacktivity, Bugcrowd VRT, and GitHub Security
+  Lab research
 * **Exact, verifiable citations**: every reference resolves to real indexed text
 * **Structure-preserving chunking**: heading breadcrumbs and code blocks intact
 * **Hybrid retrieval facade** with reranking + source diversity: lexical (FTS5
@@ -232,7 +235,10 @@ retrieval:
   per_document_cap: 2              # source diversity
 ```
 
-Twelve sources are registered by default (run `blackbook sources` to list them).
+Twenty-one sources are registered by default (run `blackbook sources` to list
+them). Website sources are bounded to their configured origin and optional
+`path_prefix`; they skip non-HTML assets and respect `max_files`,
+`max_document_bytes`, and `request_delay`.
 GitHub-backed sources accept a few extra keys: `ref` (branch), `include_glob`
 (which files to index), `exclude_glob` (skip repo plumbing / link indexes),
 `content_root` (restrict to a subtree), and `site_url` (map citations to the
@@ -254,6 +260,15 @@ blackbook ingest --source payloads     # PayloadsAllTheThings
 blackbook ingest --source hacker_recipes   # The Hacker Recipes
 blackbook ingest --source internal_all_the_things   # AD / internal network cheat sheets
 blackbook ingest --source htb_writeups     # Moamen Basel's HTB writeups + cheatsheets
+blackbook ingest --source owasp_wstg        # OWASP web testing methodology
+blackbook ingest --source owasp_asvs        # OWASP verification requirements
+blackbook ingest --source owasp_api_security # OWASP API security guidance
+blackbook ingest --source bugbounty_cheatsheet # practical bug bounty workflow
+blackbook ingest --source portswigger       # Web Security Academy guidance
+blackbook ingest --source google_bug_hunters # Google bug bounty guidance
+blackbook ingest --source hackerone_hacktivity # public disclosure case studies
+blackbook ingest --source bugcrowd_vrt      # vulnerability severity taxonomy
+blackbook ingest --source github_security_lab # GitHub Security Lab research
 blackbook ingest                        # all enabled sources
 
 # bound the size during a first run:
@@ -410,13 +425,14 @@ the banner and logs never corrupt an MCP client's stream.
 ╚═════╝ ╚══════╝╚═╝  ╚═╝ ╚═════╝╚═╝  ╚═╝╚═════╝  ╚═════╝  ╚═════╝ ╚═╝  ╚═╝
   Source-grounded cybersecurity knowledge & research MCP
   v0.7.2  ·  stdio  ·  read-only · no execution · every claim cited
-  corpus  10 sources · 3719 docs · 103360 chunks
-  graph   702 entities · 22338 relationships · 1 case
+  corpus  <live database count> sources · <live count> docs · <live count> chunks · <live count> embeddings
+  graph   <live count> entities · <live count> relationships · <live count> cases
 ```
 
 In a real terminal the wordmark is gradient-lit (cyan→indigo, intentionally
-distinct from an execution MCP's red) and the corpus/graph lines reflect your
-live index. The transport line reflects how you started it (`stdio`, or
+distinct from an execution MCP's red). The corpus and graph lines always reflect
+the live database, so the counts above are placeholders rather than a fixed
+snapshot. The transport line reflects how you started it (`stdio`, or
 `streamable-http · http://127.0.0.1:8890/mcp` under `--http`, where the MCP
 endpoint and `/health` URL are also printed). Suppress the banner with
 `blackbook serve --no-banner`.

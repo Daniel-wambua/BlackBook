@@ -29,12 +29,18 @@ Registered adapters:
 | `attack` | `MitreAttackAdapter` | git | MITRE ATT&CK enterprise STIX bundle; techniques by ATT&CK ID |
 | `internal_all_the_things` | `GithubMarkdownAdapter` | git | AD/internal-network cheat sheets (MkDocs, `docs/` subtree); config-only source via the git-type fallback |
 | `htb_writeups` | `GithubMarkdownAdapter` | git | Moamen Basel's HTB writeups + cheatsheets (Jekyll); config-only source via the git-type fallback |
+| `website` sources | `WebsiteAdapter` | website | Bounded same-origin HTML crawling for configured documentation and disclosure pages; optional `path_prefix` prevents unrelated-site crawling |
 
 Add a future source by subclassing `SourceAdapter` (or, for a GitHub repo,
 `GithubTarballAdapter`) and registering it in
 `blackbook/ingestion/__init__.py:ADAPTER_REGISTRY`. Unregistered `git`-type
-sources fall back to the generic GitHub-markdown adapter, and `filesystem`
-sources to the PDF adapter.
+sources fall back to the generic GitHub-markdown adapter, `website` sources to
+the bounded website adapter, and `filesystem` sources to the PDF adapter.
+
+Generic website sources follow links from the configured URL, stay on the same
+origin, optionally stay below `path_prefix`, skip non-HTML assets, cache pages
+under the configured raw directory, and respect `max_files`,
+`max_document_bytes`, and `request_delay`.
 
 ## GitHub sources (generic)
 

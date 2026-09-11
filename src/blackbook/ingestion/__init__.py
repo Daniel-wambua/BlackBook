@@ -12,6 +12,7 @@ from blackbook.ingestion.gtfobins import GtfoBinsAdapter
 from blackbook.ingestion.loobins import LooBinsAdapter
 from blackbook.ingestion.wadcoms import WadcomsAdapter
 from blackbook.ingestion.attack import MitreAttackAdapter
+from blackbook.ingestion.website import WebsiteAdapter
 
 ADAPTER_REGISTRY = {
     "hacktricks": HackTricksAdapter,
@@ -24,6 +25,10 @@ ADAPTER_REGISTRY = {
     "loobins": LooBinsAdapter,
     "wadcoms": WadcomsAdapter,
     "attack": MitreAttackAdapter,
+    "portswigger": WebsiteAdapter,
+    "google_bug_hunters": WebsiteAdapter,
+    "hackerone_hacktivity": WebsiteAdapter,
+    "github_security_lab": WebsiteAdapter,
 }
 
 
@@ -36,7 +41,11 @@ def adapter_for(source_config, raw_dir: str | None = None) -> SourceAdapter:
     """
     cls = ADAPTER_REGISTRY.get(source_config.id)
     if cls is None:
-        by_type = {"filesystem": PDFAdapter, "git": GithubMarkdownAdapter}
+        by_type = {
+            "filesystem": PDFAdapter,
+            "git": GithubMarkdownAdapter,
+            "website": WebsiteAdapter,
+        }
         cls = by_type.get(source_config.type)
     if cls is None:
         raise ValueError(f"no adapter registered for source {source_config.id!r}")
@@ -59,5 +68,6 @@ __all__ = [
     "LooBinsAdapter",
     "WadcomsAdapter",
     "MitreAttackAdapter",
+    "WebsiteAdapter",
     "adapter_for",
 ]

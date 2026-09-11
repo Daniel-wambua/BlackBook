@@ -51,6 +51,8 @@ class SourceConfig(BaseModel):
     # Base URL of the published site for GitHub-markdown sources. When set,
     # page URLs map under it; when unset, URLs point at the GitHub blob page.
     site_url: str | None = None
+    # Optional URL path prefix for generic website sources.
+    path_prefix: str = ""
     # Ingest only this repo subtree (repo-relative, e.g. "docs"); "" = all.
     content_root: str = ""
 
@@ -270,6 +272,95 @@ def _default_sources() -> list[SourceConfig]:
                 "templates/**, 0xdf-htb-machines.md, ippsec-video-index.md, "
                 "CONTRIBUTING.md, README.md"
             ),
+        ),
+        # Official web application testing methodology and verification.
+        SourceConfig(
+            id="owasp_wstg",
+            name="OWASP Web Security Testing Guide",
+            enabled=True,
+            type="git",
+            authority="official",
+            url="https://github.com/OWASP/wstg.git",
+            ref="master",
+            content_root="document",
+        ),
+        SourceConfig(
+            id="owasp_asvs",
+            name="OWASP ASVS",
+            enabled=True,
+            type="git",
+            authority="official",
+            url="https://github.com/OWASP/ASVS.git",
+            ref="master",
+        ),
+        SourceConfig(
+            id="owasp_api_security",
+            name="OWASP API Security Top 10",
+            enabled=True,
+            type="git",
+            authority="official",
+            url="https://github.com/OWASP/API-Security.git",
+            ref="master",
+        ),
+        SourceConfig(
+            id="bugbounty_cheatsheet",
+            name="Bug Bounty Cheatsheet",
+            enabled=True,
+            type="git",
+            authority="trusted",
+            url="https://github.com/EdOverflow/bugbounty-cheatsheet.git",
+            ref="master",
+        ),
+        # Practical labs and public disclosure case studies. Scope each crawl
+        # to the relevant path so navigation cannot expand the corpus widely.
+        SourceConfig(
+            id="portswigger",
+            name="PortSwigger Web Security Academy",
+            enabled=True,
+            type="website",
+            authority="trusted",
+            url="https://portswigger.net/web-security",
+            path_prefix="/web-security",
+            max_files=500,
+        ),
+        SourceConfig(
+            id="google_bug_hunters",
+            name="Google Bug Hunters",
+            enabled=True,
+            type="website",
+            authority="trusted",
+            url="https://bughunters.google.com/learn",
+            path_prefix="/learn",
+            max_files=250,
+        ),
+        SourceConfig(
+            id="hackerone_hacktivity",
+            name="HackerOne Hacktivity",
+            enabled=True,
+            type="website",
+            authority="user",
+            url="https://hackerone.com/hacktivity",
+            path_prefix="/hacktivity",
+            max_files=250,
+        ),
+        SourceConfig(
+            id="bugcrowd_vrt",
+            name="Bugcrowd Vulnerability Rating Taxonomy",
+            enabled=True,
+            type="git",
+            authority="trusted",
+            url="https://github.com/bugcrowd/vulnerability-rating-taxonomy.git",
+            ref="master",
+        ),
+        SourceConfig(
+            id="github_security_lab",
+            name="GitHub Security Lab Research",
+            enabled=True,
+            type="website",
+            authority="trusted",
+            url="https://securitylab.github.com/research/",
+            path_prefix="/research",
+            max_files=250,
         ),
     ]
 
