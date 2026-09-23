@@ -886,6 +886,45 @@ def doctor(verbose: bool = typer.Option(False, "--verbose", "-v")):
     else:
         checks.append(("embeddings", _OK, "disabled (lexical-only)"))
 
+    # Search diagnostics: which backends a search can actually use, as opposed
+    # to what is configured. The embeddings rows above report the raw facts;
+    # this row states their consequence, which is the part a reader cannot
+    # derive from them, because a semantic request that cannot be served
+    # degrades to lexical and answers anyway.
+    #
+    # It reuses the MCP layer's readiness reporter (config plus one COUNT(*),
+    # never a model load) so `doctor` and the `blackbook://sources` view cannot
+    # disagree about the same install. WARN, not FAIL, when semantic is
+    # switched on but inert: retrieval still works, from lexical, and every
+    # result says so. A missing [semantic] extra is the one case deliberately
+    # not handled here, because the `embeddings` check above already FAILs on
+    # it; re-testing it would duplicate the detection rather than add to it.
+    if db is not None:
+        from blackbook.mcp.tools import KnowledgeTools
+
+        semantic = KnowledgeTools._semantic_status(db, settings)
+        if not semantic.enabled:
+            checks.append(
+                ("search diagnostics", _OK, "lexical only (semantic disabled)")
+            )
+        elif semantic.vectors:
+            checks.append(
+                (
+                    "search diagnostics",
+                    _OK,
+                    f"lexical + semantic ({semantic.vectors} vectors)",
+                )
+            )
+        else:
+            checks.append(
+                (
+                    "search diagnostics",
+                    _WARN,
+                    f"semantic enabled but no vectors for {semantic.model}; "
+                    "searches degrade to lexical, run `blackbook embed`",
+                )
+            )
+
     # Index staleness
     if db is not None:
         docs = counts.get("documents", 0)

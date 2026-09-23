@@ -439,3 +439,89 @@ def test_default_weights_are_the_declared_constant(tmp_path):
         assert [r["bm25"] for r in default] != [r["bm25"] for r in unweighted]
     finally:
         db.close()
+
+
+# ---------------------------------------------------------------------------
+# A5: `doctor` reports which backends a search can actually use
+# ---------------------------------------------------------------------------
+
+
+def _doctor_stdout(tmp_path, monkeypatch, *, enabled, embed=False):
+    """Run ``blackbook doctor`` over a home-scoped corpus; return its output.
+
+    The database is built at ``<home>/data.db`` rather than using the ``db``
+    fixture, because that is the path the CLI resolves from the config it is
+    handed: a fixture database elsewhere would leave doctor reading an empty
+    one and the check under test would never see the vectors.
+    """
+    from typer.testing import CliRunner
+
+    from blackbook.cli.main import app
+
+    monkeypatch.setenv("BLACKBOOK_HOME", str(tmp_path))
+    config = tmp_path / "config.yaml"
+    config.write_text(
+        f"home: {tmp_path}\n"
+        f"embeddings:\n  enabled: {str(enabled).lower()}\n  model: fake-bow-64\n"
+        "sources:\n  - id: hacktricks\n    name: HackTricks\n"
+        "    type: git\n    url: https://example.test/r.git\n"
+    )
+    monkeypatch.setenv("BLACKBOOK_CONFIG", str(config))
+    # The check table is wider than a default 80-column capture.
+    monkeypatch.setenv("COLUMNS", "200")
+
+    database = Database(tmp_path / "data.db")
+    with database.session():
+        database.upsert_source(Source(source_id="hacktricks", name="HackTricks"))
+        doc = database.upsert_document(
+            Document(
+                source_id="hacktricks",
+                external_id="ad/kerberoasting.md",
+                title="Kerberoasting",
+                content_hash=sha256_text("kerberoasting doc"),
+            )
+        )
+        # Three chunks, so the reported vector count reads as a plural.
+        database.replace_chunks(
+            doc,
+            [
+                Chunk(
+                    doc_id=doc,
+                    ordinal=i,
+                    text=f"Kerberoasting requests SPN service tickets ({i}).",
+                    section_path=["AD"],
+                    token_estimate=8,
+                    content_hash=sha256_text(f"kc{i}"),
+                )
+                for i in range(3)
+            ],
+        )
+    if embed:
+        from blackbook.embeddings import embed_missing_chunks
+
+        embed_missing_chunks(database, FakeEmbedder())
+    database.close()
+
+    return CliRunner().invoke(app, ["doctor"]).stdout
+
+
+def test_doctor_reports_lexical_only_when_semantic_disabled(tmp_path, monkeypatch):
+    """The default install: doctor must say the semantic backend is absent."""
+    out = _doctor_stdout(tmp_path, monkeypatch, enabled=False)
+    assert "search diagnostics" in out
+    assert "lexical only (semantic disabled)" in out
+
+
+def test_doctor_warns_when_semantic_is_on_but_inert(tmp_path, monkeypatch):
+    """On with no vectors is a degradation, and the row must be actionable."""
+    out = _doctor_stdout(tmp_path, monkeypatch, enabled=True)
+    assert "search diagnostics" in out
+    assert "degrade to lexical" in out
+    assert "blackbook embed" in out
+
+
+def test_doctor_reports_both_backends_when_vectors_exist(tmp_path, monkeypatch):
+    """Vectors present: the row names the pair, so a healthy install is legible."""
+    out = _doctor_stdout(tmp_path, monkeypatch, enabled=True, embed=True)
+    assert "search diagnostics" in out
+    assert "lexical + semantic (3 vectors)" in out
