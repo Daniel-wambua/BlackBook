@@ -6,6 +6,7 @@ Administration and diagnostics for the knowledge base:
     blackbook search "kerberoasting"
     blackbook stats
     blackbook sources
+    blackbook queries        # what was asked, and what came back empty
     blackbook doctor
     blackbook eval           # run the offline retrieval benchmark
     blackbook rebuild-index
@@ -29,6 +30,7 @@ from blackbook import ui
 from blackbook.config import ensure_dirs, load_config
 from blackbook.ingestion import adapter_for
 from blackbook.ingestion.pipeline import IngestionPipeline
+from blackbook.knowledge import query_log
 from blackbook.retrieval import HybridRetriever
 from blackbook.storage.database import Database
 
@@ -179,10 +181,11 @@ def _ingest_targets(settings, source, force, verbose, pdf_dir=None, rebuild_grap
         with db.session():
             db.optimize_fts()
 
-    # Keep the knowledge graph in step with the index. A full, idempotent
-    # rebuild runs only when new/changed chunks landed, and never aborts the
-    # ingest: the graph merely enhances retrieval, so a graph failure is a
-    # warning, not a failed ingest.
+    # Keep the knowledge graph in step with the index. The rebuild runs only
+    # when new/changed chunks landed, and never aborts the ingest: the graph
+    # merely enhances retrieval, so a graph failure is a warning, not a failed
+    # ingest. It reuses the cached term extraction for the documents this ingest
+    # did not touch, which on an incremental ingest is nearly all of them.
     if rebuild_graph and total_chunks_written > 0:
         from blackbook.knowledge.graph import GraphBuilder
 
@@ -191,7 +194,8 @@ def _ingest_targets(settings, source, force, verbose, pdf_dir=None, rebuild_grap
             stats = GraphBuilder(db).rebuild()
             console.print(
                 f"  entities={stats.entities} relationships={stats.relationships} "
-                f"writeups={stats.writeups}"
+                f"writeups={stats.writeups} "
+                f"reused={stats.reused}/{stats.documents}"
             )
         except Exception as e:  # pragma: no cover - defensive
             ui.warn(f"Graph rebuild skipped: {e}", err_console)
@@ -283,7 +287,23 @@ def search(
         )
         db.close()
         raise typer.Exit(code=2)
-    results = retriever.search(query, mode=mode, source_ids=source_ids, platform=platform, limit=limit)
+    with query_log.timed() as timing:
+        results = retriever.search(
+            query, mode=mode, source_ids=source_ids, platform=platform, limit=limit
+        )
+    # Logged before the early return below, so a CLI search that finds nothing
+    # is recorded too: a miss is the entry worth having.
+    query_log.record(
+        db,
+        settings,
+        tool="cli:search",
+        query=query,
+        mode=mode,
+        sources=source_ids if source_ids is not None else ["all"],
+        result_count=len(results),
+        top_score=results[0].score if results else None,
+        latency_ms=timing["latency_ms"],
+    )
 
     if not results:
         console.print("[yellow]No results.[/yellow]")
@@ -369,6 +389,8 @@ def sources(
                 "authority": cfg.authority,
                 "enabled": cfg.enabled,
                 "indexed": sid in indexed,
+                "last_fetched": (indexed.get(sid) or {}).get("last_fetched"),
+                "version": (indexed.get(sid) or {}).get("version"),
             }
             for sid, cfg in configured.items()
         ]
@@ -383,7 +405,11 @@ def sources(
     table.add_column("Authority")
     table.add_column("Enabled")
     table.add_column("Indexed")
+    table.add_column("Fetched")
+    table.add_column("Rev")
     for sid, cfg in configured.items():
+        row = indexed.get(sid) or {}
+        version = row.get("version") or ""
         table.add_row(
             sid,
             cfg.name,
@@ -391,6 +417,92 @@ def sources(
             cfg.authority,
             "yes" if cfg.enabled else "no",
             "yes" if sid in indexed else "no",
+            # A source that has never been fetched shows a dash rather than a
+            # blank, so "no record" is visibly distinct from an empty value.
+            row.get("last_fetched") or "-",
+            version[:8] if version else "-",
+        )
+    console.print(table)
+    console.print(
+        "[dim]Fetched is when the source was last pulled successfully (UTC); "
+        "Rev is the commit it was pulled at, for sources that have one.[/dim]"
+    )
+    db.close()
+
+
+@app.command()
+def queries(
+    limit: int = typer.Option(25, "--limit", "-n", help="How many recent entries to show"),
+    empty: bool = typer.Option(
+        False, "--empty", "-e", help="Only show queries that returned nothing"
+    ),
+    clear: bool = typer.Option(False, "--clear", help="Delete the whole query log"),
+    verbose: bool = typer.Option(False, "--verbose", "-v"),
+    as_json: bool = typer.Option(False, "--json", help="Emit machine-readable JSON"),
+):
+    """Show the local query log: what was asked, and what came back.
+
+    The useful signal is the empty rows. A query that returns nothing is the
+    only evidence the index gives about what it cannot answer, and it is not
+    visible from the corpus side. Logging is on by default and can be turned
+    off with ``query_log.enabled: false`` in the config.
+    """
+    settings = _setup(verbose)
+    db = _db(settings)
+    if clear:
+        removed = db.clear_query_log()
+        db.close()
+        console.print(f"[green]Cleared {removed} query log entries.[/green]")
+        return
+
+    stats = db.query_log_stats()
+    entries = db.list_queries(limit=limit, empty_only=empty)
+    if as_json:
+        console.print_json(json.dumps({"stats": stats, "entries": entries}))
+        db.close()
+        return
+
+    if stats["total"] == 0:
+        console.print(
+            "[yellow]Query log is empty.[/yellow] Searches are recorded from "
+            "the MCP tools and `blackbook search`."
+        )
+        if not settings.query_log.enabled:
+            console.print(
+                "[dim]Logging is currently disabled "
+                "(query_log.enabled is false).[/dim]"
+            )
+        db.close()
+        return
+
+    console.print(
+        f"[bold]{stats['total']}[/bold] logged, "
+        f"[bold]{stats['empty']}[/bold] returned nothing "
+        f"({stats['empty_rate'] * 100:.1f}%), "
+        f"avg [bold]{stats['avg_latency_ms']:.1f} ms[/bold]; "
+        f"{stats['first_at']} to {stats['last_at']} UTC"
+    )
+    if not entries:
+        console.print("[dim]No entries to show.[/dim]")
+        db.close()
+        return
+
+    table = Table(title=f"Recent queries{' (empty only)' if empty else ''}")
+    table.add_column("When (UTC)", style="dim")
+    table.add_column("Query", overflow="fold")
+    table.add_column("Mode")
+    table.add_column("Hits", justify="right")
+    table.add_column("Top", justify="right")
+    table.add_column("ms", justify="right")
+    for row in entries:
+        hits = row["result_count"]
+        table.add_row(
+            (row["created_at"] or "")[:19],
+            row["query"],
+            row["mode"],
+            f"[red]{hits}[/red]" if hits == 0 else str(hits),
+            "-" if row["top_score"] is None else f"{row['top_score']:.3f}",
+            f"{row['latency_ms']:.1f}",
         )
     console.print(table)
     db.close()
@@ -424,7 +536,17 @@ def _print_graph_stats(stats) -> None:
     table.add_row("Writeups", str(stats.writeups))
     table.add_row("Entities", str(stats.entities))
     table.add_row("Relationships", str(stats.relationships))
+    # Term extraction is the expensive half of a build and is cached per
+    # document, so this row is what tells a reader why a rebuild of a
+    # mostly-unchanged corpus finished in a second. A skipped build reports it
+    # equal to the document count, which is the other thing worth seeing.
+    table.add_row("Reused cached extraction", str(stats.reused))
     console.print(table)
+    if stats.skipped:
+        console.print(
+            "[green]Graph already current:[/green] every document matched the "
+            "cached extraction, nothing was rebuilt."
+        )
     if stats.by_entity_type:
         et = Table(title="Entities by type")
         et.add_column("Type", style="cyan")
@@ -439,23 +561,75 @@ def _print_graph_stats(stats) -> None:
         for k in sorted(stats.by_predicate):
             pt.add_row(k, str(stats.by_predicate[k]))
         console.print(pt)
+        # ``uses`` and ``targets`` count distinct pairs, not mentions: those two
+        # collapse every witnessing document into one row carrying a support
+        # count, so they read far smaller than the other predicates over the same
+        # corpus. Without saying so, the drop looks like lost data.
+        console.print(
+            "[dim]uses/targets are stored once per pair with a support count, "
+            "not once per witnessing document.[/dim]"
+        )
+
+
+def _print_writeup_coverage(coverage) -> None:
+    """Render writeup coverage, contributing sources first.
+
+    The ordering is the point. A table sorted by name buries the finding: the
+    zero rows are what the reader needs to see, and they sort next to their
+    document counts so the size of each gap is legible.
+    """
+    table = Table(title="Writeup coverage")
+    table.add_column("Source", style="cyan")
+    table.add_column("Documents", justify="right")
+    table.add_column("Writeups", justify="right")
+    for source_id in sorted(
+        coverage.docs_by_source,
+        key=lambda s: (-coverage.by_source.get(s, 0), -coverage.docs_by_source[s], s),
+    ):
+        n = coverage.by_source.get(source_id, 0)
+        table.add_row(
+            source_id,
+            str(coverage.docs_by_source[source_id]),
+            str(n) if n else "[yellow]0[/yellow]",
+        )
+    console.print(table)
+    console.print(
+        f"{coverage.eligible}/{coverage.documents} documents count as writeups, "
+        f"from {coverage.sources_with_writeups} of "
+        f"{len(coverage.docs_by_source)} sources."
+    )
+    if coverage.graph_built:
+        console.print(f"Graph holds {coverage.graph_writeups} writeup entities.")
 
 
 @graph_app.command("build")
-def graph_build(verbose: bool = typer.Option(False, "--verbose", "-v")):
+def graph_build(
+    verbose: bool = typer.Option(False, "--verbose", "-v"),
+    full: bool = typer.Option(
+        False, "--full",
+        help="Re-extract every document, ignoring the per-document term cache",
+    ),
+):
     """Rebuild the knowledge graph from the indexed corpus.
 
-    A full, idempotent rebuild over every indexed document. The graph only
-    *enhances* retrieval — search works without it — so this is safe to run (or
-    skip) at any time. Nothing is fetched or executed; it is a pure transform of
+    An idempotent rebuild over every indexed document. The graph only *enhances*
+    retrieval, and search works without it, so this is safe to run (or skip) at
+    any time. Nothing is fetched or executed; it is a pure transform of
     already-indexed rows.
+
+    Term extraction (a regex pass per vocabulary term over every document's
+    text) is cached per document and replayed while the document is unchanged,
+    so a rebuild after a small ingest re-extracts only what moved and finishes
+    in a fraction of the time. The graph it produces is the same one a
+    from-scratch build would produce. Use --full to distrust that cache and
+    re-extract everything.
     """
     settings = _setup(verbose)
     db = _db(settings)
     from blackbook.knowledge.graph import GraphBuilder
 
     console.print("Building knowledge graph…")
-    stats = GraphBuilder(db).rebuild()
+    stats = GraphBuilder(db).rebuild(incremental=not full)
     _print_graph_stats(stats)
     console.print("[green]Done.[/green]")
     db.close()
@@ -469,7 +643,7 @@ def graph_show(
     """Show current knowledge-graph statistics without rebuilding."""
     settings = _setup(verbose)
     db = _db(settings)
-    from blackbook.knowledge.graph import GraphStats
+    from blackbook.knowledge.graph import GraphStats, writeup_coverage
 
     counts = db.counts()
     stats = GraphStats(
@@ -481,6 +655,7 @@ def graph_show(
         stats.by_entity_type[e["entity_type"]] = (
             stats.by_entity_type.get(e["entity_type"], 0) + 1
         )
+    coverage = writeup_coverage(db)
     if as_json:
         payload = {
             "entities": stats.entities,
@@ -488,6 +663,7 @@ def graph_show(
             "documents": stats.documents,
             "by_entity_type": stats.by_entity_type,
             "by_predicate": stats.by_predicate,
+            "writeup_coverage": coverage.as_dict(),
         }
         console.print_json(json.dumps(payload))
         db.close()
@@ -499,6 +675,82 @@ def graph_show(
         )
     else:
         _print_graph_stats(stats)
+    if coverage.documents:
+        _print_writeup_coverage(coverage)
+    db.close()
+
+
+@graph_app.command("neighbors")
+def graph_neighbors(
+    entity: str = typer.Argument(..., help="Entity name exactly as stored in the graph"),
+    entity_type: Optional[str] = typer.Option(None, "--type", help="Restrict the lookup to one entity type"),
+    depth: int = typer.Option(1, "--depth", "-d", min=1, max=3, help="Hops to walk (1-3)"),
+    direction: str = typer.Option("both", "--direction", help="Follow out, in, or both directions"),
+    predicate: Optional[list[str]] = typer.Option(None, "--predicate", "-p", help="Only follow these predicates (repeatable)"),
+    limit: int = typer.Option(25, "--limit", min=1, max=100, help="Max neighbours expanded per node"),
+    max_nodes: int = typer.Option(60, "--max-nodes", min=1, max=300, help="Max entities in the result"),
+    as_json: bool = typer.Option(False, "--json", help="Emit machine-readable JSON"),
+    verbose: bool = typer.Option(False, "--verbose", "-v"),
+):
+    """Walk the knowledge graph outward from one entity.
+
+    The same traversal the ``knowledge_graph`` MCP tool performs, so the terminal
+    and the server cannot drift apart. Traversal is exact-match on the stored
+    name; a near miss prints the candidates instead of guessing.
+    """
+    from blackbook.mcp.schemas import GraphTraversalInput
+    from blackbook.mcp.tools import KnowledgeTools
+
+    settings = _setup(verbose)
+    db = _db(settings)
+    out = KnowledgeTools(db, settings).knowledge_graph(
+        GraphTraversalInput(
+            entity=entity,
+            entity_type=entity_type,  # type: ignore[arg-type]
+            depth=depth,
+            direction=direction,  # type: ignore[arg-type]
+            predicates=predicate,
+            limit=limit,
+            max_nodes=max_nodes,
+        )
+    )
+    if as_json:
+        console.print_json(out.model_dump_json())
+        db.close()
+        if not out.found:
+            raise typer.Exit(code=1)
+        return
+
+    if not out.found:
+        console.print(f"[yellow]{out.note}[/yellow]")
+        db.close()
+        raise typer.Exit(code=1)
+
+    console.print(
+        f"[bold]{out.resolved}[/bold] [dim]({out.entity_type})[/dim]"
+        f"  {len(out.nodes) - 1} entities, {len(out.edges)} edges"
+        f" [dim]depth {out.depth}, {out.direction}[/dim]"
+    )
+    if out.edges:
+        table = Table(show_lines=False)
+        table.add_column("subject", overflow="fold")
+        table.add_column("predicate", style="cyan", no_wrap=True)
+        table.add_column("object", overflow="fold")
+        table.add_column("conf", justify="right", no_wrap=True)
+        table.add_column("sup", justify="right", no_wrap=True)
+        table.add_column("evidence", overflow="fold", style="dim")
+        for e in out.edges:
+            table.add_row(
+                e.subject,
+                e.predicate,
+                e.object,
+                f"{e.confidence:.2f}",
+                str(e.support),
+                (e.evidence.title or "") if e.evidence else "",
+            )
+        console.print(table)
+    if out.note:
+        console.print(f"[yellow]{out.note}[/yellow]")
     db.close()
 
 
@@ -644,6 +896,39 @@ def doctor(verbose: bool = typer.Option(False, "--verbose", "-v")):
             checks.append(("index populated", _FAIL, f"{docs} docs but 0 chunks"))
         else:
             checks.append(("index populated", _OK, f"{docs} docs / {chunks} chunks"))
+
+    # Writeup coverage: which sources feed the case-study layer.
+    #
+    # Reported OK, not WARN, when sources contribute no writeups. A reference
+    # source such as hacktricks contributes none by design, so warning on every
+    # gap would cry wolf on a healthy install and dilute the severities that do
+    # mean something. The detail names the largest gap instead, which is the
+    # judgement a human wants to make. The one case that does escalate is a
+    # built graph disagreeing with the corpus, because that is both actionable
+    # and invisible from the graph's own totals.
+    if db is not None and counts.get("documents", 0):
+        from blackbook.knowledge.graph import writeup_coverage
+
+        coverage = writeup_coverage(db)
+        detail = (
+            f"{coverage.eligible}/{coverage.documents} documents are writeups, "
+            f"from {coverage.sources_with_writeups} of "
+            f"{len(coverage.docs_by_source)} sources"
+        )
+        if coverage.gaps:
+            biggest = max(coverage.gaps, key=lambda g: g["documents"])
+            detail += (
+                f"; largest gap {biggest['source_id']} "
+                f"({biggest['documents']} docs)"
+            )
+        sev = _OK
+        if coverage.graph_built and coverage.graph_writeups != coverage.eligible:
+            sev = _WARN
+            detail += (
+                f"; graph holds {coverage.graph_writeups} writeup entities, "
+                "run `blackbook graph build`"
+            )
+        checks.append(("writeup coverage", sev, detail))
 
     table = Table(title="BlackBook Doctor")
     table.add_column("Check", style="cyan")

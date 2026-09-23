@@ -11,6 +11,7 @@ the ``[semantic]`` extra (sentence-transformers) is not installed.
 """
 
 import re
+import zlib
 
 import numpy as np
 import pytest
@@ -30,6 +31,15 @@ class FakeEmbedder:
     and has genuine cosine geometry: two texts that share tokens land on
     overlapping dimensions and score a higher dot product, so ranking assertions
     are meaningful without a real model.
+
+    The dimension is chosen with :func:`zlib.crc32`, not the builtin ``hash``:
+    ``hash`` on a ``str`` is salted per process unless ``PYTHONHASHSEED`` is set,
+    so the same token would land on a different dimension every run. Two
+    unrelated tokens colliding into a query's dimensions is what a ranking
+    assertion is most sensitive to, and with ``hash`` that collision set was
+    redrawn each run — ``test_semantic_ranking`` failed on roughly one process in
+    fifty. ``crc32`` is fixed across processes and platforms, so the vector space
+    is the same everywhere.
     """
 
     def __init__(self, model_name="fake-bow-64", dim=64, batch_size=8):
@@ -42,7 +52,7 @@ class FakeEmbedder:
     def _vec(self, text: str) -> np.ndarray:
         v = np.zeros(self.dim, dtype=np.float32)
         for tok in _WORD.findall(text.lower()):
-            v[hash(tok) % self.dim] += 1.0
+            v[zlib.crc32(tok.encode("utf-8")) % self.dim] += 1.0
         n = np.linalg.norm(v)
         if n > 0:
             v /= n

@@ -70,7 +70,18 @@ class Entity:
 
 @dataclass
 class Relationship:
-    """An edge in the knowledge graph."""
+    """An edge in the knowledge graph.
+
+    ``support`` is how many documents back the claim, and it means different
+    things for the two kinds of edge. A *documentary* edge (a writeup is
+    published by its source, a writeup runs on an OS) is a fact about a single
+    document, so its support is 1 and ``evidence_doc_id`` names that document. A
+    *statistical* edge (two terms co-occur) is one claim with many possible
+    witnesses: it is stored once per pair, ``support`` counts the distinct
+    documents that mentioned both, and ``evidence_doc_id`` names the lowest of
+    them as a representative citation. See
+    ``blackbook.knowledge.graph._COOCCURRENCE_PREDICATES``.
+    """
 
     subject_id: int
     predicate: str  # related_to | requires | associated_with | ...
@@ -79,6 +90,7 @@ class Relationship:
     evidence_doc_id: int | None = None
     confidence: float = 1.0
     inferred: bool = False
+    support: int = 1
 
 
 @dataclass
@@ -104,3 +116,27 @@ class Case:
     created_at: str | None = None
     updated_at: str | None = None
     meta: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class QueryLogEntry:
+    """One question put to BlackBook, and what came back.
+
+    Diagnostic, not corpus data: it records the phrasing, which sources were
+    searched, how many results came back and how strong the best one was. The
+    most useful field is ``result_count``: a zero means the corpus could not
+    answer that phrasing, which is the one signal about retrieval quality that
+    the index itself cannot report.
+    """
+
+    tool: str
+    query: str
+    mode: str = ""
+    sources: list[str] = field(default_factory=list)
+    result_count: int = 0
+    top_score: float | None = None
+    latency_ms: float = 0.0
+    backend: str = ""
+    degraded: bool = False
+    query_id: int | None = None  # set on insert
+    created_at: str | None = None

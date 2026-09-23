@@ -57,6 +57,15 @@ class SearchOutput(BaseModel):
     sources_searched: list[str]
     count: int
     results: list[SearchResultItem]
+    # Which retrieval backend(s) actually produced these results: "lexical"
+    # (FTS5/BM25), "semantic" (dense vectors), "lexical+semantic" (merged), or
+    # "none" when nothing ran. Reported so a caller can tell a genuine hybrid
+    # response from a silently lexical-only one.
+    backend: str = "lexical"
+    # True when semantic retrieval was requested but did not contribute (it is
+    # disabled, its dependency is missing, or the vector index is empty). The
+    # results are then lexical-only, and ``note`` says why.
+    degraded: bool = False
     note: str = ""
 
 
@@ -112,6 +121,74 @@ class GraphRef(BaseModel):
     confidence: float
     inferred: bool
     evidence: EvidenceRef | None = None
+    # How many documents back this edge. Always 1 for a documentary edge; for the
+    # collapsed co-occurrence predicates it is the number of documents that
+    # mentioned both terms, which is the only signal separating a claim made
+    # everywhere from one made once.
+    support: int = 1
+
+
+EntityType = Literal["technique", "tool", "service", "os", "writeup", "source"]
+GraphDirection = Literal["out", "in", "both"]
+
+
+class GraphTraversalInput(BaseModel):
+    """Walk the knowledge graph out from one entity.
+
+    ``depth`` is capped at 3 because the graph is dense: a single technique can
+    carry hundreds of co-occurrence edges, so a second hop is already a large
+    neighbourhood and a deeper walk over the real corpus would be unreadable
+    rather than more informative. ``limit`` bounds how many neighbours each node
+    expands, and ``max_nodes`` bounds the whole result; both are reported as
+    truncation rather than applied silently.
+    """
+
+    entity: str = Field(min_length=1, max_length=200)
+    entity_type: EntityType | None = None
+    depth: int = Field(default=1, ge=1, le=3)
+    direction: GraphDirection = "both"
+    predicates: list[str] | None = None
+    limit: int = Field(default=25, ge=1, le=100)
+    max_nodes: int = Field(default=60, ge=1, le=300)
+
+
+class GraphNode(BaseModel):
+    """One entity reached by the walk, with how it was reached."""
+
+    entity_id: int
+    name: str
+    entity_type: str
+    description: str = ""
+    hop: int      # 0 for the start entity
+    via: str | None = None  # predicate that first reached it, None for the start
+
+
+class GraphEdge(BaseModel):
+    """One edge walked, oriented as stored (subject -> predicate -> object)."""
+
+    subject: str
+    predicate: str
+    object: str
+    confidence: float
+    inferred: bool
+    support: int = 1
+    evidence: EvidenceRef | None = None
+
+
+class GraphTraversalOutput(BaseModel):
+    entity: str                    # the caller's input, echoed
+    resolved: str | None = None    # the stored entity name, None when not found
+    entity_type: str | None = None
+    found: bool
+    depth: int
+    direction: str
+    nodes: list[GraphNode] = Field(default_factory=list)
+    edges: list[GraphEdge] = Field(default_factory=list)
+    # True when the walk stopped short of the full neighbourhood, for either of
+    # the two reasons ``note`` distinguishes: per-node ``limit`` or ``max_nodes``.
+    truncated: bool = False
+    candidates: list[str] = Field(default_factory=list)  # near misses when unresolved
+    note: str = ""
 
 
 class TechniqueInput(BaseModel):
@@ -283,11 +360,42 @@ class KnowledgeSourceStatus(BaseModel):
     url: str | None = None
     indexed_documents: int = 0
     indexed_chunks: int = 0
+    # Freshness: when the source was last pulled successfully, and at which
+    # revision. Both are None for a source that has never been fetched by an
+    # ingest run (a corpus seeded another way, or a source not yet run). The
+    # timestamp is UTC; ``version`` is a commit for repository-backed sources
+    # and None for the ones with no revision to speak of.
+    last_fetched: str | None = None
+    version: str | None = None
+
+
+class SemanticStatus(BaseModel):
+    """Whether the optional dense-vector backend can actually contribute.
+
+    Semantic retrieval has two independent ways to be inert: it is off by
+    default (``embeddings.enabled``), and even when on it does nothing until
+    ``blackbook embed`` has written vectors. Both used to be invisible - a
+    ``mode="hybrid"`` search would quietly return lexical results. This is
+    reported by ``knowledge_sources`` so the state is inspectable.
+
+    Computed from config plus a single ``COUNT(*)``: it never loads the
+    embedding model, so asking costs nothing.
+    """
+
+    enabled: bool
+    model: str
+    vectors: int = 0
+    # True only when the backend would actually contribute to a search.
+    ready: bool = False
+    note: str = ""
 
 
 class KnowledgeSourcesOutput(BaseModel):
     count: int
     sources: list[KnowledgeSourceStatus] = Field(default_factory=list)
+    # None when the caller did not ask for global status (a single-source
+    # lookup); otherwise the semantic backend's readiness.
+    semantic: SemanticStatus | None = None
     note: str = ""
 
 

@@ -5,6 +5,7 @@ The registered tool surface:
 * ``knowledge_search`` — source-grounded search across the indexed corpus
 * ``knowledge_source`` — resolve a reference to the exact source excerpt
 * ``knowledge_technique`` — a graph-enhanced, cited dossier for a technique
+* ``knowledge_graph`` — traverse the graph outward from one entity
 * ``knowledge_case_search`` — find hands-on writeups similar to a situation
 * ``knowledge_research`` — turn a free-text observation into a source-grounded
   research packet (detected signals, technique briefs, cited references, cases)
@@ -27,9 +28,11 @@ from __future__ import annotations
 import json
 import logging
 import re
-from collections import Counter
+from collections import Counter, deque
 
 from blackbook.config import Settings
+from blackbook.knowledge import query_log
+from blackbook.knowledge.attack_index import AttackIndex
 from blackbook.knowledge.case_export import build_case_state, render_case_markdown
 from blackbook.knowledge.graph import E_TECHNIQUE, E_WRITEUP, P_DEMONSTRATED_IN
 from blackbook.knowledge.sources import find_document, get_chunk_excerpt, list_document_chunks
@@ -46,7 +49,11 @@ from blackbook.mcp.schemas import (
     FindingReviewInput,
     FindingReviewOutput,
     GetSourceInput,
+    GraphEdge,
+    GraphNode,
     GraphRef,
+    GraphTraversalInput,
+    GraphTraversalOutput,
     HuntPlanInput,
     HuntPlanItem,
     HuntPlanOutput,
@@ -56,6 +63,7 @@ from blackbook.mcp.schemas import (
     KnowledgeSourceInput,
     KnowledgeSourceStatus,
     KnowledgeSourcesOutput,
+    SemanticStatus,
     ReportDraftInput,
     ReportDraftOutput,
     ResearchInput,
@@ -71,7 +79,7 @@ from blackbook.mcp.schemas import (
     TechniqueInput,
     TechniqueOutput,
 )
-from blackbook.retrieval import HybridRetriever, SearchResult
+from blackbook.retrieval import HybridRetriever, SearchDiagnostics, SearchResult
 from blackbook.storage.database import Database
 from blackbook.storage.models import Case, CaseObservation
 
@@ -99,6 +107,34 @@ class KnowledgeTools:
         self.db = db
         self.settings = settings
         self.retriever = HybridRetriever(db, settings)
+        # Built on first use rather than here: constructing it costs a query and
+        # a full pass over the ATT&CK source, and a server that never answers a
+        # technique question should not pay that at start-up. Held for the life
+        # of the instance, which under streamable-http is the life of the
+        # process, so the ATT&CK lookup is not rebuilt per request.
+        self._attack_index: AttackIndex | None = None
+
+    def _attack_ids(self, term: str) -> str | None:
+        """ATT&CK ID for a term, curated map first, indexed corpus second.
+
+        The curated map in :mod:`blackbook.knowledge.vocab` encodes our own
+        judgement about which ATT&CK technique one of *our* vocabulary terms
+        corresponds to. It deliberately holds only the terms someone has
+        actually decided on, so it returns ``None`` for a caller that names a
+        real ATT&CK technique by name ("Scheduled Task/Job") or by ID
+        ("T1566.001") and simply never wrote it down here.
+
+        Falling back to :class:`AttackIndex` closes that gap from the other
+        direction: it resolves only names and IDs that exist in the indexed
+        ATT&CK source, so it cannot invent a mapping, and it returns ``None``
+        rather than a guess when ATT&CK gives one name to several techniques.
+        """
+        curated = attack_id(term)
+        if curated is not None:
+            return curated
+        if self._attack_index is None:
+            self._attack_index = AttackIndex(self.db)
+        return self._attack_index.resolve(term)
 
     # -- knowledge_search ---------------------------------------------------
 
@@ -110,37 +146,87 @@ class KnowledgeTools:
         # query terms so a non-vocab technique is still searched.
         query, resolved, unresolved = self._merge_techniques(inp.query, inp.techniques)
 
-        results: list[SearchResult] = self.retriever.search(
-            query,
-            mode=inp.mode,
-            source_ids=source_ids,
-            platform=inp.platform,
-            categories=inp.categories,
-            techniques=resolved,
-            limit=inp.limit,
-        )
+        diag = SearchDiagnostics()
+        with query_log.timed() as timing:
+            results: list[SearchResult] = self.retriever.search(
+                query,
+                mode=inp.mode,
+                source_ids=source_ids,
+                platform=inp.platform,
+                categories=inp.categories,
+                techniques=resolved,
+                limit=inp.limit,
+                diagnostics=diag,
+            )
         items = [self._to_item(r, inp.detail) for r in results]
-        note = ""
+        notes: list[str] = []
         if source_ids == []:
-            note = (
+            notes.append(
                 f"No enabled source matches {requested}; nothing was searched. "
                 "Check the source ID with `blackbook sources`."
             )
         elif not items:
-            note = "No matching material found in the selected sources."
+            notes.append("No matching material found in the selected sources.")
+        # A mode="semantic" request degrades to lexical rather than returning an
+        # empty list; say so instead of letting the caller assume vectors were
+        # used. This is the silent-empty path the facade now closes.
+        if diag.degraded:
+            notes.append(self._degradation_note(diag))
         if unresolved:
-            extra = (
+            notes.append(
                 "Techniques not in the controlled vocabulary were searched as "
                 f"plain terms: {', '.join(unresolved)}."
             )
-            note = f"{note} {extra}".strip()
+        # Logged before returning, and after the result is fully assembled, so
+        # the entry describes the answer the caller actually received rather
+        # than the intermediate state the retriever handed back.
+        query_log.record(
+            self.db,
+            self.settings,
+            tool="knowledge_search",
+            query=inp.query,
+            mode=inp.mode,
+            sources=source_ids if source_ids is not None else ["all"],
+            result_count=len(items),
+            top_score=items[0].relevance if items else None,
+            latency_ms=timing["latency_ms"],
+            backend=diag.backend,
+            degraded=diag.degraded,
+        )
         return SearchOutput(
             query=inp.query,
             mode=inp.mode,
             sources_searched=source_ids if source_ids is not None else ["all"],
             count=len(items),
             results=items,
-            note=note,
+            backend=diag.backend,
+            degraded=diag.degraded,
+            note=" ".join(n for n in notes if n).strip(),
+        )
+
+    @staticmethod
+    def _degradation_note(diag: SearchDiagnostics) -> str:
+        """Explain why a semantic request came back lexical-only."""
+        if diag.semantic_error:
+            return (
+                f"Semantic retrieval could not start ({diag.semantic_error}); "
+                "these results are lexical (BM25) only."
+            )
+        if not diag.semantic_enabled:
+            return (
+                "Semantic retrieval is disabled (embeddings.enabled is false); "
+                "these results are lexical (BM25) only. Enable embeddings and "
+                "run `blackbook embed` to index vectors."
+            )
+        if diag.semantic_vectors <= 0:
+            return (
+                "Semantic retrieval is enabled but the vector index is empty "
+                "(0 embeddings stored); these results are lexical (BM25) only. "
+                "Run `blackbook embed` to build it."
+            )
+        return (
+            "Semantic retrieval returned no candidates for this query; these "
+            "results are lexical (BM25) only."
         )
 
     @staticmethod
@@ -337,7 +423,10 @@ class KnowledgeTools:
         # MITRE ATT&CK enrichment: when the technique has an ATT&CK ID and
         # the ATT&CK source is indexed, ground the dossier in the real
         # technique record (tactics, platforms, official URL + a citation).
-        aid = attack_id(term)
+        # The lookup falls back to the indexed ATT&CK corpus, so naming a
+        # technique ATT&CK knows ("Scheduled Task/Job", "T1566.001") is enough
+        # to get the same enrichment as a term from our own vocabulary.
+        aid = self._attack_ids(term)
         tactics: list[str] = []
         platforms: list[str] = []
         mitre_url = None
@@ -409,25 +498,191 @@ class KnowledgeTools:
         )
 
     @staticmethod
-    def _graph_ref(rel: dict) -> GraphRef:
-        evidence = None
-        if rel.get("evidence_doc_id") is not None:
-            evidence = EvidenceRef(
-                doc_id=rel.get("evidence_doc_id"),
-                title=rel.get("evidence_title"),
-                source=rel.get("evidence_source_id"),
-                source_name=rel.get("evidence_source_name"),
-                authority=rel.get("evidence_authority"),
-                url=rel.get("evidence_url"),
-                external_id=rel.get("evidence_external_id"),
-            )
+    def _evidence_ref(rel: dict) -> EvidenceRef | None:
+        """Turn a joined relationship row's evidence columns into a citation.
+
+        Shared by every graph-facing output so there is one place that decides
+        what a citation looks like. Returns ``None`` rather than an empty ref
+        when the edge carries no document, which is the honest answer for a
+        structural edge whose evidence was pruned.
+        """
+        if rel.get("evidence_doc_id") is None:
+            return None
+        return EvidenceRef(
+            doc_id=rel.get("evidence_doc_id"),
+            title=rel.get("evidence_title"),
+            source=rel.get("evidence_source_id"),
+            source_name=rel.get("evidence_source_name"),
+            authority=rel.get("evidence_authority"),
+            url=rel.get("evidence_url"),
+            external_id=rel.get("evidence_external_id"),
+        )
+
+    @classmethod
+    def _graph_ref(cls, rel: dict) -> GraphRef:
         return GraphRef(
             name=rel["other_name"],
             entity_type=rel["other_type"],
             predicate=rel["predicate"],
             confidence=round(float(rel["confidence"]), 4),
             inferred=bool(rel["inferred"]),
-            evidence=evidence,
+            evidence=cls._evidence_ref(rel),
+            support=int(rel.get("support") or 1),
+        )
+
+    # -- knowledge_graph (graph traversal) ---------------------------------
+
+    def knowledge_graph(self, inp: GraphTraversalInput) -> GraphTraversalOutput:
+        """Walk the graph outward from one entity, up to ``inp.depth`` hops.
+
+        ``knowledge_technique`` answers a fixed question about one technique
+        (which sources document it, which tools it uses). This answers the
+        open-ended one: what is around this entity at all, through any predicate,
+        in either direction. It is the same evidence-linked edges, walked.
+
+        Nothing is invented to fill the result. Resolution is exact-match only:
+        a near miss returns the candidate names rather than guessing, because
+        traversing the wrong entity would silently produce a plausible and
+        entirely wrong neighbourhood. Both bounds (``limit`` per node,
+        ``max_nodes`` overall) are reported through ``truncated`` and ``note``
+        instead of being applied quietly.
+        """
+
+        def _empty(**kw) -> GraphTraversalOutput:
+            return GraphTraversalOutput(
+                entity=inp.entity, depth=inp.depth, direction=inp.direction, **kw
+            )
+
+        ent = self.db.get_entity(inp.entity, inp.entity_type)
+        if ent is None:
+            candidates = [
+                f"{r['name']} ({r['entity_type']})"
+                for r in self.db.find_entities(inp.entity, inp.entity_type)
+            ]
+            if candidates:
+                note = (
+                    f"No entity named {inp.entity!r}. Close matches: "
+                    + ", ".join(candidates[:8])
+                    + ". Traversal is exact-match only; pass one of these names."
+                )
+            elif self.db.entity_count() == 0:
+                note = (
+                    "No entity by that name, and the graph is empty. Run "
+                    "'blackbook graph build' after ingesting to populate it."
+                )
+            else:
+                note = (
+                    f"No entity named {inp.entity!r} in the graph"
+                    + (f" of type {inp.entity_type!r}." if inp.entity_type else ".")
+                )
+            return _empty(found=False, candidates=candidates[:8], note=note)
+
+        start_id = int(ent["entity_id"])
+        nodes: dict[int, GraphNode] = {
+            start_id: GraphNode(
+                entity_id=start_id,
+                name=ent["name"],
+                entity_type=ent["entity_type"],
+                description=ent.get("description") or "",
+                hop=0,
+                via=None,
+            )
+        }
+        edges: list[GraphEdge] = []
+        seen_edges: set[tuple[int, str, int]] = set()
+        queue: deque[tuple[int, int]] = deque([(start_id, 0)])
+
+        wanted = {p.strip() for p in (inp.predicates or []) if p.strip()}
+        dropped = 0       # neighbours cut by the per-node ``limit``
+        node_capped = 0   # neighbours not reached because ``max_nodes`` was hit
+
+        while queue:
+            node_id, hop = queue.popleft()
+            if hop >= inp.depth:
+                continue
+            rels = self.db.entity_relationships(node_id)
+            if inp.direction != "both":
+                rels = [r for r in rels if r["direction"] == inp.direction]
+            if wanted:
+                rels = [r for r in rels if r["predicate"] in wanted]
+            # Already sorted strongest-first by the database, so a cut keeps the
+            # most confident and best-supported neighbours.
+            if len(rels) > inp.limit:
+                dropped += len(rels) - inp.limit
+                rels = rels[: inp.limit]
+            for rel in rels:
+                other_id = int(rel["other_id"])
+                if other_id not in nodes:
+                    if len(nodes) >= inp.max_nodes:
+                        node_capped += 1
+                        continue  # skip the edge too: it would dangle otherwise
+                    nodes[other_id] = GraphNode(
+                        entity_id=other_id,
+                        name=rel["other_name"],
+                        entity_type=rel["other_type"],
+                        description=rel.get("other_description") or "",
+                        hop=hop + 1,
+                        via=rel["predicate"],
+                    )
+                    queue.append((other_id, hop + 1))
+                if rel["direction"] == "out":
+                    subject, obj, key = nodes[node_id].name, rel["other_name"], (
+                        node_id, rel["predicate"], other_id,
+                    )
+                else:
+                    subject, obj, key = rel["other_name"], nodes[node_id].name, (
+                        other_id, rel["predicate"], node_id,
+                    )
+                if key in seen_edges:
+                    continue
+                seen_edges.add(key)
+                edges.append(
+                    GraphEdge(
+                        subject=subject,
+                        predicate=rel["predicate"],
+                        object=obj,
+                        confidence=round(float(rel["confidence"]), 4),
+                        inferred=bool(rel["inferred"]),
+                        support=int(rel.get("support") or 1),
+                        evidence=self._evidence_ref(rel),
+                    )
+                )
+
+        truncated = bool(dropped or node_capped)
+        if not edges:
+            note = (
+                f"{ent['name']} has no relationships within depth {inp.depth}"
+                + (f" matching {sorted(wanted)}." if wanted else ".")
+            )
+        elif truncated:
+            parts = []
+            if dropped:
+                parts.append(
+                    f"{dropped} lower-confidence neighbours were left out "
+                    f"(per-node limit {inp.limit})"
+                )
+            if node_capped:
+                parts.append(
+                    f"{node_capped} more were not reached (max_nodes {inp.max_nodes})"
+                )
+            note = (
+                "Partial neighbourhood: " + "; ".join(parts)
+                + ". This is a bounded view, not the whole neighbourhood."
+            )
+        else:
+            note = ""
+
+        return GraphTraversalOutput(
+            entity=inp.entity,
+            resolved=ent["name"],
+            entity_type=ent["entity_type"],
+            found=True,
+            depth=inp.depth,
+            direction=inp.direction,
+            nodes=list(nodes.values()),
+            edges=edges,
+            truncated=truncated,
+            note=note,
         )
 
     # -- knowledge_case_search (Phase 4) -----------------------------------
@@ -568,7 +823,7 @@ class KnowledgeTools:
                     technique=term,
                     resolved=resolve_technique(term) is not None,
                     in_graph=in_graph,
-                    attack_id=attack_id(term),
+                    attack_id=self._attack_ids(term),
                     documented_by=documented_by,
                 )
             )
@@ -821,6 +1076,36 @@ class KnowledgeTools:
             warnings=warnings,
         )
 
+    @staticmethod
+    def _semantic_status(db, settings) -> SemanticStatus:
+        """Report whether dense retrieval can contribute, without loading a model.
+
+        Semantic retrieval is inert in two independent ways and both used to be
+        silent: it is off by default, and even when enabled it contributes
+        nothing until ``blackbook embed`` has written vectors. One ``COUNT(*)``
+        distinguishes them for the caller.
+        """
+        enabled = bool(settings.embeddings.enabled)
+        model = settings.embeddings.model
+        vectors = db.embedding_count(model)
+        ready = enabled and vectors > 0
+        if not enabled:
+            note = (
+                "Disabled (embeddings.enabled is false); searches cannot use the "
+                "semantic backend. Enable it and run `blackbook embed` to index vectors."
+            )
+        elif vectors <= 0:
+            note = (
+                f"Enabled but no vectors are indexed for model {model}; run "
+                "`blackbook embed` to build the index. Until then searches fall "
+                "back to lexical (BM25)."
+            )
+        else:
+            note = f"{vectors} vectors indexed for {model}."
+        return SemanticStatus(
+            enabled=enabled, model=model, vectors=vectors, ready=ready, note=note
+        )
+
     def knowledge_sources(self, inp: KnowledgeSourceInput) -> KnowledgeSourcesOutput:
         """Return configured sources with real indexed document/chunk counts."""
         configured = {source.id: source for source in self.settings.sources}
@@ -840,12 +1125,20 @@ class KnowledgeTools:
                 url=source.url,
                 indexed_documents=counts.get(source.id, {}).get("documents", 0),
                 indexed_chunks=counts.get(source.id, {}).get("chunks", 0),
+                # Freshness is a property of the stored row, not the config, so
+                # it reads from the indexed row and stays None until an ingest
+                # has actually pulled the source.
+                last_fetched=(indexed.get(source.id) or {}).get("last_fetched"),
+                version=(indexed.get(source.id) or {}).get("version"),
             )
             for source in selected
         ]
         return KnowledgeSourcesOutput(
             count=len(statuses),
             sources=statuses,
+            # A single-source lookup is a per-source question, not a global one;
+            # the corpus-wide backend status would be noise there.
+            semantic=None if inp.source else self._semantic_status(self.db, self.settings),
             note=("Configured source is not indexed yet." if statuses and not indexed.get(statuses[0].id) and inp.source else ""),
         )
 

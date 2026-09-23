@@ -101,6 +101,11 @@ class RetrievalConfig(BaseModel):
     max_context_chunks: int = 12
     # Source-diversity: at most this many chunks may come from one document.
     per_document_cap: int = 2
+    # At most this many results from one source, while other sources still have
+    # something to offer. Not a hard truncation: slots the cap leaves empty are
+    # filled from the set-aside hits, so a result set is never made shorter than
+    # the caller asked for. Set to 0 to disable.
+    per_source_cap: int = 4
     snippet_chars: int = 400
 
 
@@ -112,6 +117,21 @@ class DatabaseConfig(BaseModel):
 
 class LoggingConfig(BaseModel):
     level: str = "INFO"
+
+
+class QueryLogConfig(BaseModel):
+    """Local record of the questions put to BlackBook.
+
+    Disabled means nothing is written at all; the table stays empty. The log is
+    local (the SQLite file only) and never transmitted anywhere, but it does
+    store the query text verbatim, so it is a deliberate opt-out rather than a
+    forced feature.
+    """
+
+    enabled: bool = True
+    # The log keeps the newest N entries and prunes older ones on insert, so it
+    # is bounded rather than growing for the life of the install.
+    max_entries: int = 5000
 
 
 class ServerConfig(BaseModel):
@@ -440,6 +460,7 @@ class Settings(BaseSettings):
     embeddings: EmbeddingsConfig = Field(default_factory=EmbeddingsConfig)
     retrieval: RetrievalConfig = Field(default_factory=RetrievalConfig)
     logging: LoggingConfig = Field(default_factory=LoggingConfig)
+    query_log: QueryLogConfig = Field(default_factory=QueryLogConfig)
     server: ServerConfig = Field(default_factory=ServerConfig)
     sources: list[SourceConfig] = Field(default_factory=_default_sources)
 

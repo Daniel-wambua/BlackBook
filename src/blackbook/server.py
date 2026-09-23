@@ -15,6 +15,7 @@ import logging
 from mcp.server.fastmcp import FastMCP
 
 from blackbook.config import ensure_dirs, is_loopback_host, load_config
+from blackbook.mcp import prompts, resources
 from blackbook.mcp.schemas import (
     CaseSearchInput,
     CaseSearchOutput,
@@ -23,6 +24,8 @@ from blackbook.mcp.schemas import (
     FindingReviewInput,
     FindingReviewOutput,
     GetSourceInput,
+    GraphTraversalInput,
+    GraphTraversalOutput,
     HuntPlanInput,
     HuntPlanOutput,
     KnowledgeCompareInput,
@@ -65,7 +68,8 @@ def build_server(settings=None, db: Database | None = None) -> FastMCP:
             "technique, knowledge_case_search to find similar hands-on writeups, "
             "knowledge_research to turn a free-text observation into a "
             "source-grounded research packet (detected signals, technique briefs, "
-            "cited references and related cases), and knowledge_source to retrieve "
+            "cited references and related cases), knowledge_graph to walk the graph "
+            "outward from an entity, and knowledge_source to retrieve "
             "exact supporting excerpts. Use knowledge_context to keep local "
             "investigation state — create a case and record observations, "
             "knowledge_hunt_plan for a cited, non-executing validation plan, "
@@ -73,7 +77,11 @@ def build_server(settings=None, db: Database | None = None) -> FastMCP:
             "to draft from a local case, knowledge_sources to inspect corpus status, "
             "and knowledge_compare to compare independent source views. "
             "findings, and hypotheses as you work. Every knowledge result carries "
-            "verifiable provenance. BlackBook never executes commands or touches "
+            "verifiable provenance. Read the blackbook:// resources (sources, "
+            "corpus, vocabulary, cases) for local state without spending a tool "
+            "call, and the triage_observation, explain_technique, review_finding "
+            "and draft_report prompts for framings that cite what the tools "
+            "return. BlackBook never executes commands or touches "
             "remote systems."
         ),
         host=settings.server.host,
@@ -102,7 +110,9 @@ def build_server(settings=None, db: Database | None = None) -> FastMCP:
             "mcp_endpoint": settings.server.path,
         }
         try:
-            payload["corpus"] = db.counts()
+            # Cached: this is polled on a timer and nobody acts on the exact
+            # chunk count. See Database.counts_cached().
+            payload["corpus"] = db.counts_cached()
         except Exception:  # pragma: no cover - health must never crash
             payload["corpus"] = None
         return payload
@@ -111,6 +121,13 @@ def build_server(settings=None, db: Database | None = None) -> FastMCP:
     async def health(_request: Request) -> JSONResponse:
         payload = _health_payload()
         payload["tools"] = [t.name for t in await mcp.list_tools()]
+        # The whole observable surface, not just the tools: an operator checking
+        # a running server wants to see what it exposes without reading source.
+        payload["resources"] = [str(r.uri) for r in await mcp.list_resources()]
+        payload["resource_templates"] = [
+            t.uriTemplate for t in await mcp.list_resource_templates()
+        ]
+        payload["prompts"] = [p.name for p in await mcp.list_prompts()]
         return JSONResponse(payload)
 
     @mcp.custom_route("/", methods=["GET"])
@@ -125,7 +142,7 @@ def build_server(settings=None, db: Database | None = None) -> FastMCP:
         except Exception:  # pragma: no cover - landing page must never crash
             tools = []
         try:
-            c = db.counts()
+            c = db.counts_cached()  # cached: same reasoning as /health
             corpus = (
                 f"{c['sources']} sources · {c['documents']} docs · "
                 f"{c['chunks']} chunks · {c['entities']} entities · "
@@ -134,6 +151,19 @@ def build_server(settings=None, db: Database | None = None) -> FastMCP:
         except Exception:  # pragma: no cover
             corpus = "unavailable"
         tool_items = "".join(f"<li><code>{t}</code></li>" for t in tools)
+        try:
+            resource_items = "".join(
+                f"<li><code>{r.uri}</code></li>" for r in await mcp.list_resources()
+            )
+            resource_items += "".join(
+                f"<li><code>{t.uriTemplate}</code></li>"
+                for t in await mcp.list_resource_templates()
+            )
+            prompt_items = "".join(
+                f"<li><code>{p.name}</code></li>" for p in await mcp.list_prompts()
+            )
+        except Exception:  # pragma: no cover - landing page must never crash
+            resource_items = prompt_items = ""
         html = f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -162,6 +192,10 @@ def build_server(settings=None, db: Database | None = None) -> FastMCP:
 </div>
 <p><strong>Tools</strong></p>
 <ul>{tool_items}</ul>
+<p><strong>Resources</strong></p>
+<ul>{resource_items}</ul>
+<p><strong>Prompts</strong></p>
+<ul>{prompt_items}</ul>
 <div class="note">
   <code>{mcp_path}</code> is a machine endpoint — connect an MCP client to it, don't open it
   in a browser (a plain browser request returns <code>406 Not Acceptable</code> by design).
@@ -328,6 +362,36 @@ def build_server(settings=None, db: Database | None = None) -> FastMCP:
         return tools.knowledge_research(inp)
 
     @mcp.tool(
+        name="knowledge_graph",
+        description=(
+            "Traverse the knowledge graph outward from one entity (technique, tool, "
+            "service, os, writeup or source), up to 3 hops, following any predicate "
+            "in either direction. Returns the reached entities and the evidence-linked "
+            "edges between them. Resolution is exact-match: a near miss returns "
+            "candidate names instead of guessing. Bounds on the walk are reported as "
+            "truncation rather than applied silently. Read-only."
+        ),
+    )
+    def knowledge_graph(
+        entity: str,
+        entity_type: str | None = None,
+        depth: int = 1,
+        direction: str = "both",
+        predicates: list[str] | None = None,
+        limit: int = 25,
+        max_nodes: int = 60,
+    ) -> GraphTraversalOutput:
+        return tools.knowledge_graph(GraphTraversalInput(
+            entity=entity,
+            entity_type=entity_type,  # type: ignore[arg-type]
+            depth=depth,
+            direction=direction,  # type: ignore[arg-type]
+            predicates=predicates,
+            limit=limit,
+            max_nodes=max_nodes,
+        ))
+
+    @mcp.tool(
         name="knowledge_hunt_plan",
         description=(
             "Build a source-grounded bug bounty validation plan from an observation. "
@@ -457,6 +521,115 @@ def build_server(settings=None, db: Database | None = None) -> FastMCP:
             meta=meta,
         )
         return tools.knowledge_context(inp)
+
+    # -- resources ---------------------------------------------------------
+    #
+    # Read-only views of local state, so an agent can see what the corpus holds
+    # without spending a tool call on it. Every body is produced by a function
+    # in mcp/resources.py, which is testable without the protocol.
+
+    @mcp.resource(
+        "blackbook://sources",
+        name="sources",
+        description=(
+            "Configured sources with their index counts and freshness (when each "
+            "was last pulled, and at which revision). The same payload as the "
+            "knowledge_sources tool."
+        ),
+        mime_type="application/json",
+    )
+    def sources_resource() -> str:
+        return resources.sources_json(db, settings)
+
+    @mcp.resource(
+        "blackbook://corpus",
+        name="corpus",
+        description=(
+            "Corpus counts: sources, documents, chunks, embeddings, graph "
+            "entities and relationships, cases, and query-log totals."
+        ),
+        mime_type="application/json",
+    )
+    def corpus_resource() -> str:
+        return resources.corpus_json(db)
+
+    @mcp.resource(
+        "blackbook://vocabulary",
+        name="vocabulary",
+        description=(
+            "The controlled vocabulary: service, technique and tool terms, the "
+            "ATT&CK id each technique maps to, and the aliases the filters "
+            "resolve. Read this to use a spelling the index will match."
+        ),
+        mime_type="application/json",
+    )
+    def vocabulary_resource() -> str:
+        return resources.vocabulary_json()
+
+    @mcp.resource(
+        "blackbook://cases",
+        name="cases",
+        description="Local investigation cases: name, target, platform, observation count.",
+        mime_type="application/json",
+    )
+    def cases_resource() -> str:
+        return resources.cases_json(db)
+
+    @mcp.resource(
+        "blackbook://case/{name}",
+        name="case",
+        description="One local case rendered as portable Markdown, ready to paste or commit.",
+        mime_type="text/markdown",
+    )
+    def case_resource(name: str) -> str:
+        return resources.case_markdown(db, name)
+
+    # -- prompts -----------------------------------------------------------
+    #
+    # Framings for the questions this corpus can answer. Each one routes the
+    # agent through the tools and asks it to cite, so a prompt cannot produce an
+    # answer the sources do not support.
+
+    @mcp.prompt(
+        name="triage_observation",
+        description=(
+            "Turn a raw observation into a source-grounded triage starting "
+            "point: detected signals, mapped techniques, similar writeups, and "
+            "bounded validation hypotheses."
+        ),
+    )
+    def triage_observation_prompt(observation: str, target: str = "") -> str:
+        return prompts.triage_observation(observation, target)
+
+    @mcp.prompt(
+        name="explain_technique",
+        description=(
+            "Explain a technique strictly from what the indexed sources "
+            "document, naming the parts the corpus is thin on."
+        ),
+    )
+    def explain_technique_prompt(technique: str, platform: str = "") -> str:
+        return prompts.explain_technique(technique, platform)
+
+    @mcp.prompt(
+        name="review_finding",
+        description=(
+            "Review a suspected finding for evidence gaps before it is "
+            "reported, and say plainly whether it is one yet."
+        ),
+    )
+    def review_finding_prompt(finding: str) -> str:
+        return prompts.review_finding(finding)
+
+    @mcp.prompt(
+        name="draft_report",
+        description=(
+            "Draft a cautious report from a local case, keeping the warnings "
+            "where evidence is missing."
+        ),
+    )
+    def draft_report_prompt(case: str) -> str:
+        return prompts.draft_report(case)
 
     return mcp
 

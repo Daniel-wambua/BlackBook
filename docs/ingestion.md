@@ -185,12 +185,14 @@ are stored and searched, and `blackbook embed` for (re)embedding without re-inge
 ## Knowledge graph (Phase 4)
 
 After a run that writes new or changed chunks, ingestion **automatically rebuilds
-the knowledge graph** from the index (a full, idempotent transform of already-indexed
-rows — nothing is fetched or executed). The rebuild is best-effort: a graph failure
+the knowledge graph** from the index (an idempotent transform of already-indexed
+rows; nothing is fetched or executed). The rebuild is best-effort: a graph failure
 logs a warning and never fails the ingest, because the graph only *enhances*
 retrieval. It is skipped when no chunks changed, and can be disabled with
 `ingest --no-graph` / `update --no-graph`. Build or inspect it directly with
-`blackbook graph build` / `blackbook graph show`. See
+`blackbook graph build` / `blackbook graph show`; add `--full` to `graph build` to
+ignore the per-document term cache and re-extract everything, which is only worth it
+after changing the vocabulary itself. See
 [architecture.md](architecture.md) for the entity/relationship model and
 [retrieval.md](retrieval.md) for where the graph is (and is not) consulted.
 

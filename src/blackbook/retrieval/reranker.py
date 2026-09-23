@@ -2,8 +2,10 @@
 
 Raw lexical/semantic scores are combined with metadata signals (source
 authority, platform/category match, section relevance), then reordered to
-avoid returning many near-identical chunks from a single document. The goal is
-*diverse, high-value evidence*, not a dump of the top N rows from one page.
+avoid returning many near-identical chunks from a single document, or a result
+set drawn entirely from one source when other sources hold comparable evidence.
+The goal is *diverse, high-value evidence*, not a dump of the top N rows from
+one page.
 """
 
 from __future__ import annotations
@@ -115,6 +117,7 @@ def rerank(
     query: str,
     limit: int,
     per_document_cap: int = 2,
+    per_source_cap: int = 4,
     platform: str | None = None,
     categories: list[str] | None = None,
     techniques: list[str] | None = None,
@@ -123,8 +126,8 @@ def rerank(
     """Score, filter, and diversify hits.
 
     Final score = base_score * authority * (1 + keyword_overlap + technique
-    bias + intent-mode bonus). Then apply a per-document cap so one page can't
-    dominate the result set.
+    bias + intent-mode bonus). Then apply a per-document cap and a per-source
+    cap, so neither one page nor one source can dominate the result set.
 
     ``platform`` and ``categories`` are *hard* filters: a hit whose document
     doesn't carry the tag is excluded entirely, not merely down-ranked. The
@@ -144,6 +147,17 @@ def rerank(
     title/heading name a known technique. Both are additive nudges layered on
     the same base evidence score, so a strong generic hit still surfaces — it
     is merely outranked by an equally strong on-intent one.
+
+    The two caps differ in kind. ``per_document_cap`` is hard: past it, a
+    chunk is discarded, because several chunks of one page are near-certainly
+    the same evidence restated. ``per_source_cap`` is a *preference*: past it,
+    a hit is set aside rather than dropped, and the second pass below spends
+    any slots the diverse hits did not fill on exactly those set-aside hits.
+    The consequence worth stating plainly is that a cap of N never reduces the
+    number of results; on a corpus where one source holds everything relevant
+    the output is unchanged, and the cap only reorders when there was genuinely
+    another source to prefer. A caller asking for eight results still gets
+    eight.
     """
     platform = (platform or "").lower() or None
     cat_filter = {c.lower() for c in (categories or [])}
@@ -180,9 +194,13 @@ def rerank(
     # Sort by score descending.
     scored.sort(key=lambda x: x.score, reverse=True)
 
-    # Source-diversity: per-document cap + cross-document near-dedup.
+    # First pass: per-document cap, cross-document near-dedup, and the
+    # per-source preference. Hits the source cap sets aside go to ``deferred``
+    # in score order, so the second pass inherits the same ranking.
     out: list[LexicalHit] = []
     per_doc: dict[int, int] = {}
+    per_source: dict[str, int] = {}
+    deferred: list[LexicalHit] = []
     for h in scored:
         used = per_doc.get(h.doc_id, 0)
         if used >= per_document_cap:
@@ -191,8 +209,27 @@ def rerank(
         # even if it comes from a different document.
         if any(shingle_overlap(h.text, kept.text) >= 0.9 for kept in out):
             continue
+        if per_source_cap and per_source.get(h.source_id, 0) >= per_source_cap:
+            deferred.append(h)
+            continue
         per_doc[h.doc_id] = used + 1
+        per_source[h.source_id] = per_source.get(h.source_id, 0) + 1
         out.append(h)
         if len(out) >= limit:
+            return out
+
+    # Second pass: fill whatever the source cap left empty. Only the source cap
+    # is relaxed here. The document cap still holds, because it is about not
+    # repeating one page, and a caller who asked for more results than there
+    # are distinct documents should get the repetition rather than a short list.
+    for h in deferred:
+        if len(out) >= limit:
             break
+        used = per_doc.get(h.doc_id, 0)
+        if used >= per_document_cap:
+            continue
+        if any(shingle_overlap(h.text, kept.text) >= 0.9 for kept in out):
+            continue
+        per_doc[h.doc_id] = used + 1
+        out.append(h)
     return out

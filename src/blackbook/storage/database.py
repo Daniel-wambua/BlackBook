@@ -13,6 +13,7 @@ import hashlib
 import json
 import sqlite3
 import threading
+import time
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Iterable, Iterator
@@ -24,9 +25,16 @@ from blackbook.storage.models import (
     Chunk,
     Document,
     Entity,
+    QueryLogEntry,
     Relationship,
     Source,
 )
+
+
+# The ``meta`` key holding the record of the last knowledge-graph build. Read by
+# the incremental rebuild to tell a graph that already matches the corpus from
+# one that needs rebuilding. Dropped by clear_graph() with the graph itself.
+_GRAPH_BUILD_KEY = "graph_build"
 
 
 def sha256_text(text: str) -> str:
@@ -54,6 +62,11 @@ class Database:
         # RLock so an accidental nested session() in the same thread can't
         # self-deadlock; reads need no lock — WAL readers don't block the writer.
         self._session_lock = threading.RLock()
+        # Cached counts for the poll-shaped readouts (/health and the landing
+        # page), which a monitor or a browser may fetch on a timer. Holds
+        # (monotonic_timestamp, counts) or None. Cleared by any write this
+        # process commits; see counts_cached().
+        self._counts_cache: tuple[float, dict[str, int]] | None = None
         # check_same_thread=False so the MCP server thread can share it; the
         # server is single-writer by design.
         self.conn = sqlite3.connect(self.path, check_same_thread=False)
@@ -87,6 +100,10 @@ class Database:
             except Exception:
                 self.conn.rollback()
                 raise
+            # Only after a committed write: anything we just changed must show
+            # up in the next counts_cached() call, not after the TTL. A rolled
+            # back session changed nothing, so it leaves the cache alone.
+            self._counts_cache = None
 
     def close(self) -> None:
         self.conn.close()
@@ -132,6 +149,37 @@ class Database:
     def list_sources(self) -> list[dict]:
         rows = self.conn.execute("SELECT * FROM sources ORDER BY source_id").fetchall()
         return [dict(r) for r in rows]
+
+    def mark_source_fetched(self, source_id: str, version: str | None = None) -> int:
+        """Stamp a source as fetched now, at ``version`` when one is known.
+
+        Returns the number of rows changed, which is 0 for a source that was
+        never registered. That is a no-op rather than an insert on purpose: the
+        caller (ingest) registers the source immediately before running it, so
+        a missing row means something is wrong upstream, and inventing a row
+        with a placeholder name here would hide that rather than show it.
+
+        ``version`` is only written when the caller has one. A source with no
+        revision marker (a website crawl) leaves whatever is stored alone, so a
+        best-effort run cannot erase a commit recorded by an earlier one.
+
+        The timestamp comes from SQLite's clock, so every row in this schema
+        agrees on what "now" is, and it is UTC like every other timestamp here.
+        """
+        with self.session():
+            if version is None:
+                cur = self.conn.execute(
+                    "UPDATE sources SET last_fetched = datetime('now') "
+                    "WHERE source_id = ?",
+                    (source_id,),
+                )
+            else:
+                cur = self.conn.execute(
+                    "UPDATE sources SET last_fetched = datetime('now'), version = ? "
+                    "WHERE source_id = ?",
+                    (version, source_id),
+                )
+        return int(cur.rowcount)
 
     def source_index_counts(self) -> dict[str, dict[str, int]]:
         """Return indexed document/chunk counts grouped by source."""
@@ -373,6 +421,14 @@ class Database:
 
     # -- lexical search ---------------------------------------------------
 
+    # FTS5 column weights for ``bm25()``, in the virtual table's declared column
+    # order: (title, section, text). A term matching a document's *title* is far
+    # stronger evidence of relevance than the same term buried in body prose, so
+    # title and heading matches are weighted above the body. Unweighted
+    # ``bm25()`` treats all three columns identically, which let long body
+    # chunks outrank documents actually *about* the query term.
+    BM25_WEIGHTS: tuple[float, float, float] = (5.0, 2.0, 1.0)
+
     def fts_search(
         self,
         query: str,
@@ -381,11 +437,24 @@ class Database:
         offset: int = 0,
         platform: str | None = None,
         categories: list[str] | None = None,
+        bm25_weights: tuple[float, ...] | None = None,
     ) -> list[dict]:
         """FTS5 BM25 search over chunks.
 
         Returns chunk rows joined with document/source metadata and the FTS5
         ``bm25`` rank (lower is better; we negate it so higher is better).
+
+        ``bm25_weights`` overrides :attr:`BM25_WEIGHTS` for this call. Weights
+        change only the *ranking*, not the sign convention: SQLite's ``bm25()``
+        still returns smaller-is-better values, so the caller's negation and
+        normalization are unaffected.
+
+        Ties on ``bm25`` are broken by ``chunk_id``. This matters more than it
+        looks: a term present in *every* document (IDF 0, e.g. a single-document
+        corpus or a very common term) scores exactly 0.0 for every chunk, and
+        without a tie-break the order of those rows is whatever the FTS index
+        happens to yield -- unstable across index rebuilds and sensitive to
+        query planning. ``chunk_id`` is stable and follows ingest order.
 
         ``platform`` and ``categories`` are *hard* filters over the document's
         category tags (case-insensitive): a hit that doesn't carry the tag is
@@ -417,6 +486,12 @@ class Database:
             )
             params.extend(cats)
         where = "WHERE " + " AND ".join(conditions)
+        # ``bm25()``'s weight arguments are bound as literals rather than as
+        # placeholders (SQLite evaluates FTS5 auxiliary-function arguments at
+        # prepare time). ``float()`` coerces each weight, so nothing but a
+        # numeric literal can reach the SQL text.
+        weights = bm25_weights if bm25_weights is not None else self.BM25_WEIGHTS
+        weight_sql = ", ".join(f"{float(w):g}" for w in weights)
         sql = f"""
             SELECT
                 c.chunk_id,
@@ -436,13 +511,13 @@ class Database:
                 d.categories,
                 s.name AS source_name,
                 s.authority AS source_authority,
-                bm25(chunks_fts) AS bm25
+                bm25(chunks_fts, {weight_sql}) AS bm25
             FROM chunks_fts
             JOIN chunks c ON c.chunk_id = chunks_fts.rowid
             JOIN documents d ON d.doc_id = c.doc_id
             JOIN sources s ON s.source_id = d.source_id
             {where}
-            ORDER BY bm25 ASC
+            ORDER BY bm25 ASC, c.chunk_id ASC
             LIMIT ? OFFSET ?
         """
         params.extend([limit, offset])
@@ -657,8 +732,8 @@ class Database:
         cur = self.conn.execute(
             """
             INSERT INTO relationships(subject_id, predicate, object_id,
-                                      evidence_doc_id, confidence, inferred)
-            VALUES (?, ?, ?, ?, ?, ?)
+                                      evidence_doc_id, confidence, inferred, support)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 r.subject_id,
@@ -667,6 +742,7 @@ class Database:
                 r.evidence_doc_id,
                 r.confidence,
                 int(r.inferred),
+                int(r.support),
             ),
         )
         return int(cur.lastrowid)
@@ -688,6 +764,16 @@ class Database:
                 (entity_type,),
             ).fetchall()
         return [dict(r) for r in rows]
+
+    def entity_count(self) -> int:
+        """Number of graph entities.
+
+        ``counts()`` answers this too, but it recomputes a ``COUNT(*)`` over the
+        chunk table as part of the same dict, so it is the wrong call for a
+        reader that only needs to know whether a graph exists at all. This is a
+        count over the entities table alone.
+        """
+        return int(self.conn.execute("SELECT COUNT(*) FROM entities").fetchone()[0])
 
     def find_entities(self, name_like: str, entity_type: str | None = None) -> list[dict]:
         """Case-insensitive substring match on entity name.
@@ -725,7 +811,7 @@ class Database:
         # Incoming: this entity is the object; neighbour is the subject.
         sql = """
             SELECT r.rel_id, r.predicate, 'out' AS direction,
-                   r.confidence, r.inferred, r.evidence_doc_id,
+                   r.confidence, r.inferred, r.evidence_doc_id, r.support,
                    o.entity_id AS other_id, o.name AS other_name,
                    o.entity_type AS other_type, o.description AS other_description,
                    d.title AS evidence_title, d.url AS evidence_url,
@@ -739,7 +825,7 @@ class Database:
             WHERE r.subject_id = ?
             UNION ALL
             SELECT r.rel_id, r.predicate, 'in' AS direction,
-                   r.confidence, r.inferred, r.evidence_doc_id,
+                   r.confidence, r.inferred, r.evidence_doc_id, r.support,
                    sub.entity_id AS other_id, sub.name AS other_name,
                    sub.entity_type AS other_type, sub.description AS other_description,
                    d.title AS evidence_title, d.url AS evidence_url,
@@ -756,18 +842,99 @@ class Database:
         out = [dict(r) for r in rows]
         if predicate is not None:
             out = [r for r in out if r["predicate"] == predicate]
-        # Highest-confidence edges first, then stable by rel_id.
-        out.sort(key=lambda r: (-float(r["confidence"]), int(r["rel_id"])))
+        # Highest-confidence edges first. ``support`` breaks ties: a co-occurrence
+        # claim backed by 400 documents is a stronger signal than the same claim
+        # backed by one, and confidence alone cannot separate them because every
+        # co-occurrence edge carries the same tier. rel_id keeps the order stable.
+        out.sort(
+            key=lambda r: (
+                -float(r["confidence"]),
+                -int(r["support"]),
+                int(r["rel_id"]),
+            )
+        )
         return out
 
     def clear_graph(self) -> None:
         """Remove all graph entities and relationships (idempotent rebuild).
 
         Cases/observations are intentionally left untouched — they are a
-        separate, user-authored layer, not derived from ingestion.
+        separate, user-authored layer, not derived from ingestion. So is the
+        ``document_graph`` term cache, which stays valid: what it holds is a
+        function of the documents, not of the graph. The build record is
+        dropped, because the graph it described no longer exists.
         """
         self.conn.execute("DELETE FROM relationships")
         self.conn.execute("DELETE FROM entities")
+        self.conn.execute("DELETE FROM meta WHERE key = ?", (_GRAPH_BUILD_KEY,))
+
+    def has_graph(self) -> bool:
+        """True when at least one relationship is stored.
+
+        Used by the incremental rebuild to tell a graph that is current from one
+        that was cleared out from under it, which no document fingerprint can
+        show.
+        """
+        return self.conn.execute("SELECT 1 FROM relationships LIMIT 1").fetchone() is not None
+
+    def relationship_counts_by_predicate(self) -> dict[str, int]:
+        rows = self.conn.execute(
+            "SELECT predicate, COUNT(*) FROM relationships GROUP BY predicate"
+        ).fetchall()
+        return {str(r[0]): int(r[1]) for r in rows}
+
+    # -- knowledge-graph term cache ---------------------------------------
+
+    def document_graph_cache(self) -> dict[int, tuple[str, str]]:
+        """doc_id -> (fingerprint, terms JSON), for the incremental rebuild."""
+        rows = self.conn.execute(
+            "SELECT doc_id, fingerprint, terms FROM document_graph"
+        ).fetchall()
+        return {int(r[0]): (str(r[1]), str(r[2])) for r in rows}
+
+    def replace_document_graph(
+        self,
+        rows: Iterable[tuple[int, str, str]],
+        source_ids: list[str] | None = None,
+    ) -> None:
+        """Store the term cache for the documents just processed.
+
+        Scoped to ``source_ids`` when the rebuild was scoped, so a rebuild of one
+        source cannot discard the cache for the others.
+        """
+        if source_ids:
+            placeholders = ",".join("?" for _ in source_ids)
+            self.conn.execute(
+                "DELETE FROM document_graph WHERE doc_id IN "
+                f"(SELECT doc_id FROM documents WHERE source_id IN ({placeholders}))",
+                tuple(source_ids),
+            )
+        else:
+            self.conn.execute("DELETE FROM document_graph")
+        self.conn.executemany(
+            "INSERT INTO document_graph(doc_id, fingerprint, terms) VALUES (?, ?, ?)",
+            list(rows),
+        )
+
+    def get_graph_build(self) -> dict | None:
+        """The record of the last graph build, or None if there is none."""
+        row = self.conn.execute(
+            "SELECT value FROM meta WHERE key = ?", (_GRAPH_BUILD_KEY,)
+        ).fetchone()
+        if row is None:
+            return None
+        try:
+            payload = json.loads(row[0])
+        except (TypeError, ValueError):  # pragma: no cover - only a corrupt row
+            return None
+        return payload if isinstance(payload, dict) else None
+
+    def set_graph_build(self, payload: dict) -> None:
+        self.conn.execute(
+            "INSERT INTO meta(key, value) VALUES(?, ?) "
+            "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+            (_GRAPH_BUILD_KEY, json.dumps(payload)),
+        )
 
     # -- cases ------------------------------------------------------------
 
@@ -840,6 +1007,122 @@ class Database:
         )
         return cur.rowcount > 0
 
+    # -- query log ---------------------------------------------------------
+
+    def log_query(self, entry: QueryLogEntry, max_entries: int = 0) -> int:
+        """Append one query-log entry and return its id.
+
+        Runs in a ``session()`` so the insert takes the same write lock as every
+        other writer and commits immediately: a long-lived MCP server that left
+        this transaction open would block a concurrent CLI ingest, which is the
+        failure the session lock exists to prevent.
+
+        ``max_entries`` above zero prunes the log to that many newest rows after
+        inserting. The prune is a single indexed range delete, and it runs here
+        rather than on a schedule because the insert is the only moment the log
+        can grow. The count that gates it is over a table the bound keeps small.
+        """
+        with self.session():
+            cur = self.conn.execute(
+                """
+                INSERT INTO query_log(
+                    tool, query, mode, sources, result_count,
+                    top_score, latency_ms, backend, degraded
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    entry.tool,
+                    entry.query,
+                    entry.mode,
+                    json.dumps(entry.sources),
+                    entry.result_count,
+                    entry.top_score,
+                    entry.latency_ms,
+                    entry.backend,
+                    1 if entry.degraded else 0,
+                ),
+            )
+            query_id = int(cur.lastrowid)
+            if max_entries > 0:
+                self._prune_query_log(max_entries)
+        return query_id
+
+    def _prune_query_log(self, max_entries: int) -> int:
+        """Drop all but the ``max_entries`` newest rows. Returns rows removed.
+
+        Deletes *below* the oldest id of the newest ``max_entries``, so the
+        statement is an indexed range scan on the primary key rather than a set
+        difference over the table. The bound is exclusive: ``<=`` would take the
+        cut row as well and leave one entry fewer than asked for. Caller holds
+        the session.
+        """
+        count = int(self.conn.execute("SELECT COUNT(*) FROM query_log").fetchone()[0])
+        if count <= max_entries:
+            return 0
+        cur = self.conn.execute(
+            """
+            DELETE FROM query_log WHERE query_id < (
+                SELECT MIN(query_id) FROM (
+                    SELECT query_id FROM query_log
+                    ORDER BY query_id DESC LIMIT ?
+                )
+            )
+            """,
+            (max_entries,),
+        )
+        return int(cur.rowcount)
+
+    def list_queries(
+        self, limit: int = 50, empty_only: bool = False
+    ) -> list[dict]:
+        """Recent query-log entries, newest first.
+
+        ``empty_only`` keeps only entries that returned nothing, which is the
+        view worth reading: those are the phrasings the corpus could not answer.
+        """
+        where = "WHERE result_count = 0" if empty_only else ""
+        rows = self.conn.execute(
+            f"""
+            SELECT * FROM query_log {where}
+            ORDER BY query_id DESC LIMIT ?
+            """,
+            (limit,),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    def query_log_stats(self) -> dict:
+        """Aggregate query-log counts, or zeros when nothing is logged.
+
+        ``empty_rate`` is computed over logged entries with a result count, so
+        an empty log reports 0.0 rather than a meaningless division.
+        """
+        row = self.conn.execute(
+            """
+            SELECT COUNT(*)                                   AS total,
+                   COALESCE(SUM(result_count = 0), 0)         AS empty,
+                   MIN(created_at)                            AS first_at,
+                   MAX(created_at)                            AS last_at,
+                   AVG(latency_ms)                            AS avg_latency_ms
+            FROM query_log
+            """
+        ).fetchone()
+        total = int(row["total"] or 0)
+        empty = int(row["empty"] or 0)
+        return {
+            "total": total,
+            "empty": empty,
+            "empty_rate": (empty / total) if total else 0.0,
+            "first_at": row["first_at"],
+            "last_at": row["last_at"],
+            "avg_latency_ms": float(row["avg_latency_ms"] or 0.0),
+        }
+
+    def clear_query_log(self) -> int:
+        """Delete the whole query log. Returns rows removed."""
+        with self.session():
+            cur = self.conn.execute("DELETE FROM query_log")
+        return int(cur.rowcount)
+
     # -- stats / maintenance ----------------------------------------------
 
     def counts(self) -> dict[str, int]:
@@ -856,6 +1139,34 @@ class Database:
             "relationships": one("SELECT COUNT(*) FROM relationships"),
             "cases": one("SELECT COUNT(*) FROM cases"),
         }
+
+    # A cached count reading is good for this long. See counts_cached().
+    COUNTS_TTL_SECONDS = 5.0
+
+    def counts_cached(self, max_age: float | None = None) -> dict[str, int]:
+        """Counts from a short-lived cache, for the meta readouts.
+
+        ``counts()`` scans the chunk table, which is the largest in the schema:
+        about 4ms against a half-million-chunk corpus. That is nothing once and
+        wasteful per request on ``/health``, which a monitor may poll on a
+        timer, and on the landing page, which a browser retries. Those are
+        status readouts, not something a decision hangs on, so a bounded
+        five-second staleness is a fair trade for not re-counting half a
+        million rows on every poll.
+
+        Two things keep it honest. Any write *this* process commits clears the
+        cache outright, so a server that ingests reports the new numbers on its
+        very next call. A write from *another* process (a CLI ingest while the
+        server is up) is picked up within ``max_age``, because nothing here can
+        observe it. Where the exact number matters, call ``counts()``.
+        """
+        max_age = self.COUNTS_TTL_SECONDS if max_age is None else max_age
+        cached = self._counts_cache
+        if cached is not None and (time.monotonic() - cached[0]) < max_age:
+            return dict(cached[1])
+        fresh = self.counts()
+        self._counts_cache = (time.monotonic(), fresh)
+        return dict(fresh)
 
     def rebuild_fts(self) -> None:
         """Rebuild the FTS index from the chunks table."""

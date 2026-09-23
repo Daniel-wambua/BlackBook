@@ -7,6 +7,7 @@ from blackbook.storage.models import (
     Chunk,
     Document,
     Entity,
+    QueryLogEntry,
     Relationship,
     Source,
 )
@@ -18,6 +19,7 @@ __all__ = [
     "Chunk",
     "Document",
     "Entity",
+    "QueryLogEntry",
     "Relationship",
     "Source",
 ]

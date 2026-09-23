@@ -6,16 +6,31 @@ missing, construction raises :class:`~blackbook.embeddings.EmbeddingsUnavailable
 and the hybrid facade degrades to lexical-only.
 
 Retrieval is a **brute-force flat cosine index**: every stored chunk vector is
-compared against the query vector with a single matrix multiply. Because all
-vectors are L2-normalized at ingest time, cosine similarity is just the dot
-product. For a single-file knowledge base of this size (tens of thousands of
-chunks) a flat scan is fast (a few tens of milliseconds) and needs no extra
-index structure or dependency. Swapping in an ANN index later would not change
-this module's public surface.
+compared against the query vector with a single matrix multiply. Vectors are
+L2-normalized at ingest time, so cosine similarity is just the dot product. No
+index structure is built and no extra dependency is required.
+
+The price of that simplicity is linear in the corpus, and it is not small at
+full scale. The decoded matrix is ``chunks * dim * 4`` bytes, so the full
+corpus (~5.3e5 chunks at dim 384) is roughly 800 MB resident, re-read from
+SQLite on every cache miss. Enabling embeddings here is therefore a deliberate,
+expensive operation rather than a free upgrade: ``blackbook embed`` must first
+encode the whole corpus (hours of CPU on a laptop), and the server then holds
+that matrix in memory for the life of the process. Two consequences are handled
+explicitly below:
+
+* the matrix cache is **bounded** (LRU by entry count and a total byte budget),
+  so a caller that alternates source filters cannot multiply the resident cost
+  of the index by the number of distinct filters it happens to use;
+* a matrix above :attr:`SemanticRetriever.MATRIX_WARN_BYTES` logs one warning
+  naming the measured size, so the cost is visible instead of being discovered
+  as swap pressure.
 
 The returned type is :class:`~blackbook.retrieval.lexical.LexicalHit` — the same
 type lexical search returns — so the hybrid merge/rerank pipeline treats both
-backends uniformly.
+backends uniformly. :meth:`SemanticRetriever._matrix` is the only place that
+knows how candidates are produced, which is the seam an ANN index would replace
+without changing this module's public surface.
 """
 
 from __future__ import annotations
@@ -43,6 +58,18 @@ class SemanticRetriever:
     :class:`Embedder` raises and the hybrid facade catches it.
     """
 
+    # The decoded-matrix cache is bounded two ways. Entry count caps the damage
+    # from a caller that cycles through many distinct source filters; the byte
+    # budget caps it when a single entry is itself enormous (the full-corpus
+    # matrix is ~800 MB at the documented corpus size). Oldest entries are
+    # evicted first. An entry larger than the whole budget is not cached at all
+    # — it is still served, just recomputed on the next call.
+    CACHE_MAX_ENTRIES = 4
+    CACHE_MAX_BYTES = 512 * 1024 * 1024
+    # Above this, one warning is logged per (version, size) pair naming the
+    # measured resident cost, so the flat scan's price is never a surprise.
+    MATRIX_WARN_BYTES = 256 * 1024 * 1024
+
     def __init__(self, db: Database, settings: Settings, embedder: Embedder | None = None):
         self.db = db
         self.settings = settings
@@ -57,14 +84,38 @@ class SemanticRetriever:
         )
         self.model_name = self.embedder.model_name
         # Cache of decoded vector matrices keyed by the source-filter signature.
-        # Each entry is (embeddings_version_at_load, chunk_ids, matrix). The
-        # version counter (bumped on *any* chunk/embedding change, see
+        # Each entry is (embeddings_version_at_load, chunk_ids, matrix, nbytes).
+        # The version counter (bumped on *any* chunk/embedding change, see
         # Database._bump_embeddings_version) invalidates the cache after a
         # re-embed — and after a delete+add that leaves the row count unchanged,
-        # which the old count-based guard silently missed.
-        self._cache: dict[tuple[str, ...] | None, tuple[int, list[int], object]] = {}
+        # which the old count-based guard silently missed. Insertion order is
+        # the LRU order (dicts preserve it), so eviction pops from the front.
+        self._cache: dict[tuple[str, ...] | None, tuple[int, list[int], object, int]] = {}
+        self._cache_bytes = 0
+        # (version, nbytes) pairs already warned about, to log the scale warning
+        # once per corpus size rather than on every cache miss.
+        self._warned: set[tuple[int, int]] = set()
 
     # -- public API --------------------------------------------------------
+
+    def describe(self) -> dict[str, object]:
+        """Cheap readiness summary of the vector index for this model.
+
+        Deliberately does not touch the matrix cache or the embedder's encode
+        path, so it is safe to call from a status/inspection tool: it costs one
+        ``COUNT(*)``. ``bytes`` is the resident cost the flat scan would pay,
+        and ``over_warn_bytes`` flags that it exceeds ``MATRIX_WARN_BYTES``.
+        """
+        vectors = self.db.embedding_count(self.model_name)
+        dim = int(getattr(self.embedder, "dim", 0) or 0)
+        nbytes = vectors * dim * 4  # float32
+        return {
+            "model": self.model_name,
+            "vectors": vectors,
+            "dim": dim,
+            "bytes": nbytes,
+            "over_warn_bytes": nbytes > self.MATRIX_WARN_BYTES,
+        }
 
     def search(
         self,
@@ -146,14 +197,21 @@ class SemanticRetriever:
 
         Results are cached per source-filter signature and invalidated when the
         embeddings version changes (any insert/delete/re-chunk bumps it), so
-        results never go stale within a long-lived server process.
+        results never go stale within a long-lived server process. The cache is
+        bounded by :attr:`CACHE_MAX_ENTRIES` and :attr:`CACHE_MAX_BYTES`; the
+        most recently used entry is moved to the back so a hot filter survives
+        an eviction sweep.
         """
         sig: tuple[str, ...] | None = (
             tuple(sorted(source_ids)) if source_ids is not None else None
         )
         version = self.db.embeddings_version()
+        nbytes = 0
         cached = self._cache.get(sig)
         if cached is not None and cached[0] == version:
+            # Refresh LRU position on a hit (cheap: delete + reinsert).
+            del self._cache[sig]
+            self._cache[sig] = cached
             return cached[1], cached[2]
 
         ids, blobs = self.db.load_embeddings(self.model_name, source_ids=source_ids)
@@ -161,5 +219,52 @@ class SemanticRetriever:
         # Keep chunk_ids aligned with the rows that survived decoding (a stale
         # vector of the wrong dimensionality is dropped by matrix_from_blobs).
         kept_ids = [ids[i] for i in kept]
-        self._cache[sig] = (version, kept_ids, matrix)
+        nbytes = int(getattr(matrix, "nbytes", 0) or 0)
+
+        self._warn_if_large(version, nbytes, len(kept_ids))
+        self._store(sig, version, kept_ids, matrix, nbytes)
         return kept_ids, matrix
+
+    def _warn_if_large(self, version: int, nbytes: int, rows: int) -> None:
+        """Log the flat scan's resident cost once per (version, size)."""
+        if nbytes <= self.MATRIX_WARN_BYTES:
+            return
+        key = (version, nbytes)
+        if key in self._warned:
+            return
+        self._warned.add(key)
+        log.warning(
+            "Semantic flat index holds %d vectors (%.0f MB resident) for model %s; "
+            "every cache miss re-reads that from SQLite and the scan is O(n) per "
+            "query. This is expected at full corpus scale, but it is the point at "
+            "which an ANN index becomes worth its dependency.",
+            rows,
+            nbytes / (1024 * 1024),
+            self.model_name,
+        )
+
+    def _store(
+        self,
+        sig: tuple[str, ...] | None,
+        version: int,
+        kept_ids: list[int],
+        matrix: object,
+        nbytes: int,
+    ) -> None:
+        """Insert into the bounded cache, evicting oldest entries as needed."""
+        if nbytes > self.CACHE_MAX_BYTES:
+            # Bigger than the entire budget: serve it, but do not pin it.
+            return
+        previous = self._cache.pop(sig, None)
+        if previous is not None:
+            self._cache_bytes -= previous[3]
+        while self._cache and (
+            len(self._cache) >= self.CACHE_MAX_ENTRIES
+            or self._cache_bytes + nbytes > self.CACHE_MAX_BYTES
+        ):
+            # Plain dicts keep insertion order, so the first key is the oldest.
+            # (dict.popitem takes no arguments; that is the OrderedDict API.)
+            evicted = self._cache.pop(next(iter(self._cache)))
+            self._cache_bytes -= evicted[3]
+        self._cache[sig] = (version, kept_ids, matrix, nbytes)
+        self._cache_bytes += nbytes

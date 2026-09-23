@@ -4,6 +4,7 @@ from blackbook.mcp.schemas import (
     CaseSearchInput,
     ContextInput,
     GetSourceInput,
+    GraphTraversalInput,
     ResearchInput,
     SearchInput,
     TechniqueInput,
@@ -133,6 +134,183 @@ def test_technique_unresolved_term(tmp_path, seeded_db):
     assert out.in_graph is False
     assert out.documented_by == []
     assert out.technique == "totally unknown thing"
+
+
+# -- knowledge_graph (traversal) --------------------------------------------
+#
+# The seeded graph is fully determined (see test_graph.py): kerberoasting has
+# four outgoing edges (documented_by HackTricks at 0.9, uses impacket and
+# targets active directory / kerberos, all at 0.5) and no incoming ones, while
+# 0xdf has two incoming edges and no outgoing ones. That asymmetry is what
+# makes the direction filter testable without contriving a fixture.
+
+
+def _traverse(tmp_path, db, **kw):
+    return make_tools(tmp_path, db).knowledge_graph(GraphTraversalInput(**kw))
+
+
+def test_graph_traversal_returns_the_neighbourhood_with_evidence(tmp_path, seeded_db):
+    GraphBuilder(seeded_db).rebuild()
+    out = _traverse(tmp_path, seeded_db, entity="kerberoasting")
+    assert out.found is True
+    assert out.resolved == "kerberoasting" and out.entity_type == "technique"
+    # Four outgoing edges, five entities counting the start node.
+    assert len(out.edges) == 4
+    assert len(out.nodes) == 5
+    assert {n.name for n in out.nodes} == {
+        "kerberoasting", "HackTricks", "impacket", "active directory", "kerberos",
+    }
+    # Every edge is citable, and every neighbour other than the start has a hop.
+    for e in out.edges:
+        assert e.evidence is not None and e.evidence.doc_id is not None
+        assert e.subject == "kerberoasting"  # all four leave the technique
+    assert {n.hop for n in out.nodes if n.name != "kerberoasting"} == {1}
+    assert out.truncated is False
+    assert out.note == ""
+
+
+def test_graph_traversal_direction_filter(tmp_path, seeded_db):
+    """Edges are stored subject -> object, so direction is a real asymmetry.
+
+    Nothing points at 0xdf from the corpus side, so its outgoing walk is empty
+    and its incoming walk is not. A filter that quietly ignored direction would
+    return the same thing twice here.
+    """
+    GraphBuilder(seeded_db).rebuild()
+    out_only = _traverse(tmp_path, seeded_db, entity="0xdf", direction="out")
+    assert out_only.found is True
+    assert out_only.edges == []
+    assert out_only.note  # says so rather than returning a bare empty result
+
+    in_only = _traverse(tmp_path, seeded_db, entity="0xdf", direction="in")
+    assert len(in_only.edges) == 2
+    assert {e.subject for e in in_only.edges} == {"as-rep roasting", "HTB: Forest"}
+    assert all(e.object == "0xdf" for e in in_only.edges)
+
+
+def test_graph_traversal_depth_reaches_further(tmp_path, seeded_db):
+    """A second hop surfaces an edge whose endpoints were both already visible.
+
+    From 0xdf the one-hop view already contains as-rep roasting and HTB: Forest,
+    but not the demonstrated_in edge between them: that edge leaves as-rep
+    roasting, and the walk had not expanded it yet. depth=2 expands it and the
+    edge appears. The node set is unchanged, which is the point — depth buys
+    edges, not only more entities.
+    """
+    GraphBuilder(seeded_db).rebuild()
+    edge_set = ("as-rep roasting", "demonstrated_in", "HTB: Forest")
+    one = _traverse(tmp_path, seeded_db, entity="0xdf", depth=1)
+    two = _traverse(tmp_path, seeded_db, entity="0xdf", depth=2)
+    assert len(one.nodes) == 3 and len(one.edges) == 2
+    assert edge_set not in {(e.subject, e.predicate, e.object) for e in one.edges}
+    assert len(two.nodes) == 3
+    assert {(e.subject, e.predicate, e.object) for e in two.edges} == {
+        ("as-rep roasting", "documented_by", "0xdf"),
+        ("HTB: Forest", "documented_by", "0xdf"),
+        edge_set,
+    }
+
+
+def test_graph_traversal_depth_does_not_invent_a_second_hop(tmp_path, seeded_db):
+    """Every hop-1 neighbour of kerberoasting is a leaf here, so depth 2 adds none.
+
+    The walk reports the corpus as it is. A deeper setting on a shallow
+    neighbourhood returns the same thing rather than padding the result to look
+    like it explored more.
+    """
+    GraphBuilder(seeded_db).rebuild()
+    one = _traverse(tmp_path, seeded_db, entity="kerberoasting", depth=1)
+    two = _traverse(tmp_path, seeded_db, entity="kerberoasting", depth=2)
+    assert len(one.nodes) == 5 and len(one.edges) == 4
+    assert [n.name for n in two.nodes] == [n.name for n in one.nodes]
+    assert len(two.edges) == 4
+    # Everything reached came through a predicate that is on an edge.
+    predicates = {e.predicate for e in two.edges}
+    assert {n.via for n in two.nodes if n.hop} <= predicates
+
+
+def test_graph_traversal_reports_max_nodes_truncation_without_dangling_edges(
+    tmp_path, seeded_db
+):
+    """A bounded walk must not reference an entity it refused to include.
+
+    Cutting the node budget mid-edge would leave an edge naming an entity that is
+    absent from ``nodes``, which a caller could not resolve. The edge is dropped
+    with the node, and the shortfall is reported.
+    """
+    GraphBuilder(seeded_db).rebuild()
+    out = _traverse(tmp_path, seeded_db, entity="kerberoasting", max_nodes=3)
+    assert out.truncated is True
+    assert "max_nodes" in out.note
+    assert len(out.nodes) <= 3
+    known = {n.name for n in out.nodes}
+    for e in out.edges:
+        assert e.subject in known and e.object in known
+
+
+def test_graph_traversal_per_node_limit_keeps_the_strongest(tmp_path, seeded_db):
+    """The cut is taken from the weakest end, and it is announced.
+
+    ``entity_relationships`` orders strongest-first, so bounding each node keeps
+    the 0.9 documentary edge over the 0.5 co-occurrence ones rather than
+    whichever happened to be stored first.
+    """
+    GraphBuilder(seeded_db).rebuild()
+    out = _traverse(tmp_path, seeded_db, entity="kerberoasting", limit=2)
+    assert out.truncated is True
+    assert len(out.edges) == 2
+    assert out.edges[0].predicate == "documented_by"
+    assert out.edges[0].confidence == 0.9
+    assert "limit 2" in out.note
+
+
+def test_graph_traversal_predicate_filter(tmp_path, seeded_db):
+    GraphBuilder(seeded_db).rebuild()
+    out = _traverse(tmp_path, seeded_db, entity="kerberoasting", predicates=["targets"])
+    assert len(out.edges) == 2
+    assert {e.predicate for e in out.edges} == {"targets"}
+    assert {e.object for e in out.edges} == {"active directory", "kerberos"}
+    # The unfiltered neighbours are absent, not merely unlabelled.
+    assert "impacket" not in {n.name for n in out.nodes}
+    assert out.truncated is False
+
+
+def test_graph_traversal_does_not_guess_a_near_miss(tmp_path, seeded_db):
+    """A substring match is offered as a candidate, never silently traversed.
+
+    "kerberoast" is a prefix of the real entity. Resolving it automatically would
+    return a plausible neighbourhood for an entity the caller never named, so the
+    walk declines and names what it found instead.
+    """
+    GraphBuilder(seeded_db).rebuild()
+    out = _traverse(tmp_path, seeded_db, entity="kerberoast")
+    assert out.found is False
+    assert out.nodes == [] and out.edges == []
+    assert "kerberoasting (technique)" in out.candidates
+    assert "kerberoasting (technique)" in out.note
+
+
+def test_graph_traversal_type_scope_is_enforced(tmp_path, seeded_db):
+    """Asking for the wrong type is a miss, not a fallback to the right one."""
+    GraphBuilder(seeded_db).rebuild()
+    out = _traverse(tmp_path, seeded_db, entity="kerberoasting", entity_type="tool")
+    assert out.found is False
+    assert out.candidates == []
+    assert "tool" in out.note
+
+
+def test_graph_traversal_without_a_graph_says_how_to_build_one(tmp_path, db):
+    """An empty graph and an absent entity are different answers."""
+    out = _traverse(tmp_path, db, entity="kerberoasting")
+    assert out.found is False
+    assert "graph build" in out.note
+
+
+def test_graph_traversal_is_deterministic(tmp_path, seeded_db):
+    GraphBuilder(seeded_db).rebuild()
+    first = _traverse(tmp_path, seeded_db, entity="kerberoasting", depth=2)
+    second = _traverse(tmp_path, seeded_db, entity="kerberoasting", depth=2)
+    assert first.model_dump() == second.model_dump()
 
 
 # -- knowledge_case_search (Phase 4) ----------------------------------------

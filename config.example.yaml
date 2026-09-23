@@ -335,10 +335,29 @@ retrieval:
   max_limit: 50
   max_context_chunks: 12
   per_document_cap: 2          # source diversity: max chunks per document
+  # Diversity across sources. HackTricks alone is over a thousand documents,
+  # so without this a query it covers heavily can return eight HackTricks
+  # chunks and nothing else while the writeup repos, the cheatsheets and the
+  # local pdfs hold comparable evidence. This is a preference, not a quota: a
+  # result the cap sets aside is used to fill any slot the diverse hits did not
+  # take, so the cap never makes a result list shorter than you asked for. Set
+  # to 0 to disable.
+  per_source_cap: 4
   snippet_chars: 400
 
 logging:
   level: INFO
+
+query_log:
+  # Record every search locally: phrasing, mode, sources, hit count, best
+  # score, latency. Read it with `blackbook queries`, which is most useful
+  # with --empty (the phrasings that returned nothing). Local to the SQLite
+  # file, never transmitted. Set enabled: false to record nothing at all.
+  enabled: true
+  # Newest entries kept; older ones are pruned on insert, so the log stays a
+  # bounded recent-history record rather than growing for the life of the
+  # install.
+  max_entries: 5000
 
 server:
   # HTTP transport settings (only used by `blackbook serve --http`; stdio

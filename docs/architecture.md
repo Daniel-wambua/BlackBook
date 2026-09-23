@@ -92,6 +92,15 @@ reads documents/chunks and their metadata; it never fetches or executes anything
 is rebuilt idempotently (a full clear-and-rebuild) after any ingest that writes chunks,
 or on demand via `blackbook graph build`.
 
+The rebuild itself is incremental in one respect: the vocabulary terms each document
+contributes are cached (`document_graph`), keyed by a fingerprint of everything the
+extraction reads, so a rebuild re-extracts only the documents that changed and skips
+outright when none did. The graph is still assembled from **all** documents' terms, and
+only that extraction step is cached, never the edges it produces. That is what keeps an
+incremental rebuild equal to a from-scratch one by construction, and it matters because
+the extraction is a regex pass per vocabulary term over every document's full text and
+accounts for essentially all of a build's cost.
+
 **Entities** (`entities`, unique on `(name, entity_type)`):
 
 | Type | Meaning | Keyed by |

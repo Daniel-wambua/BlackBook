@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import sqlite3
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 5
 INDEX_VERSION = 1
 
 SCHEMA = """
@@ -130,11 +130,26 @@ CREATE TABLE IF NOT EXISTS relationships (
     object_id        INTEGER NOT NULL REFERENCES entities(entity_id) ON DELETE CASCADE,
     evidence_doc_id  INTEGER REFERENCES documents(doc_id) ON DELETE SET NULL,
     confidence       REAL NOT NULL DEFAULT 1.0,
-    inferred         INTEGER NOT NULL DEFAULT 0
+    inferred         INTEGER NOT NULL DEFAULT 0,
+    support          INTEGER NOT NULL DEFAULT 1
 );
 
 CREATE INDEX IF NOT EXISTS idx_rel_subject ON relationships(subject_id);
 CREATE INDEX IF NOT EXISTS idx_rel_object ON relationships(object_id);
+
+-- Per-document knowledge-graph inputs: the vocabulary terms the document
+-- contributed, keyed by a fingerprint of everything the extraction read
+-- (content hash, title, source, categories, metadata). This is a cache, not
+-- part of the graph: dropping the table costs one slower rebuild and nothing
+-- else, since a rebuild derives the same terms again. It exists because term
+-- extraction is a regex pass over every document's full text and dominates a
+-- full rebuild, so an incremental rebuild skips it for the documents that have
+-- not changed. Rows follow their document.
+CREATE TABLE IF NOT EXISTS document_graph (
+    doc_id      INTEGER PRIMARY KEY REFERENCES documents(doc_id) ON DELETE CASCADE,
+    fingerprint TEXT NOT NULL,
+    terms       TEXT NOT NULL
+);
 
 CREATE TABLE IF NOT EXISTS cases (
     case_id    INTEGER PRIMARY KEY,
@@ -156,6 +171,28 @@ CREATE TABLE IF NOT EXISTS case_observations (
 );
 
 CREATE INDEX IF NOT EXISTS idx_obs_case ON case_observations(case_id);
+
+-- Local query log: what was asked, and what came back. Written by the search
+-- tools and `blackbook search`, read by `blackbook queries`. It exists to
+-- answer the questions the corpus cannot answer about itself: which phrasings
+-- return nothing, and what is being asked that is not indexed. Bounded by
+-- pruning, so it is a recent-history log rather than an ever-growing one.
+-- ``created_at`` is UTC, as every other timestamp in this schema.
+CREATE TABLE IF NOT EXISTS query_log (
+    query_id     INTEGER PRIMARY KEY,
+    created_at   TEXT NOT NULL DEFAULT (datetime('now')),
+    tool         TEXT NOT NULL,
+    query        TEXT NOT NULL DEFAULT '',
+    mode         TEXT NOT NULL DEFAULT '',
+    sources      TEXT NOT NULL DEFAULT '[]',
+    result_count INTEGER NOT NULL DEFAULT 0,
+    top_score    REAL,
+    latency_ms   REAL NOT NULL DEFAULT 0,
+    backend      TEXT NOT NULL DEFAULT '',
+    degraded     INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE INDEX IF NOT EXISTS idx_query_log_created ON query_log(created_at);
 """
 
 
@@ -176,9 +213,29 @@ def migrate(conn) -> None:
     ):
         return
     conn.executescript(SCHEMA)
+    # ``CREATE TABLE IF NOT EXISTS`` is a no-op on a table that already exists,
+    # so it cannot deliver a new column to an existing database: the script above
+    # leaves a pre-v3 ``relationships`` table exactly as it was. An explicit ALTER
+    # is the only thing that reaches it, and it must be guarded because SQLite has
+    # no ``ADD COLUMN IF NOT EXISTS``.
+    _ensure_column(conn, "relationships", "support", "INTEGER NOT NULL DEFAULT 1")
     _set_meta(conn, "schema_version", str(SCHEMA_VERSION))
     _set_meta(conn, "index_version", str(INDEX_VERSION))
     conn.commit()
+
+
+def _ensure_column(conn, table: str, column: str, decl: str) -> None:
+    """Add ``column`` to ``table`` if it is not already there. Idempotent.
+
+    The existence check is what makes this safe to run on every migration pass,
+    including the first one against a fresh database where ``SCHEMA`` just
+    created the column. Both the table and column names are code-supplied
+    literals, never user input, so the interpolation below cannot be reached
+    with anything a caller controls.
+    """
+    existing = {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
+    if column not in existing:
+        conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {decl}")
 
 
 def _set_meta(conn, key: str, value: str) -> None:

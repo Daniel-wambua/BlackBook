@@ -233,6 +233,83 @@ scanning of the internal network are also reachable. Defences include strict
 allow-lists of destinations and blocking link-local and internal ranges.
 """,
     ),
+    # -- distractors -------------------------------------------------------
+    # These exist to make the benchmark discriminate. Each one shares heavy
+    # vocabulary with a document above while being a *different* answer, so a
+    # ranking that merely matches terms ranks them highly and loses. Before
+    # these were added every gold query scored a perfect 1.0 and the benchmark
+    # could not have detected a ranking regression at all.
+    BenchmarkDoc(
+        source_id=REF_SOURCE,
+        external_id="ref/kerberos-delegation.md",
+        title="Kerberos Delegation Abuse",
+        categories=["active-directory", "kerberos", "windows"],
+        body="""# Kerberos Delegation Abuse
+
+Kerberos delegation lets a service impersonate a user to a *different* service,
+which is the mechanism behind several Active Directory privilege escalations.
+
+## Unconstrained delegation
+
+A host configured for unconstrained delegation caches a forwardable TGT for
+every user who authenticates to it. Compromising such a host and coercing a
+domain controller to authenticate to it yields a domain controller machine
+account ticket, which can be replayed.
+
+## Constrained delegation
+
+Constrained delegation restricts impersonation to a named service, and
+resource-based constrained delegation moves the permission onto the target
+object — where a write on the target's ``msDS-AllowedToActOnBehalfOfOtherIdentity``
+attribute is enough to abuse it.
+""",
+    ),
+    BenchmarkDoc(
+        source_id=REF_SOURCE,
+        external_id="ref/golden-ticket.md",
+        title="Golden Ticket Forgery",
+        categories=["active-directory", "kerberos", "credential-access", "windows"],
+        body="""# Golden Ticket Forgery
+
+A golden ticket is a forged Kerberos TGT signed with the krbtgt account's key,
+granting its bearer domain-wide access as any principal.
+
+## Obtaining the key
+
+Forging one requires the krbtgt hash or AES key, which is why replication-based
+attacks that extract account secrets are the usual precursor. Once the key is
+held, no further authentication to the domain controller is needed.
+
+## Detection and limits
+
+Golden tickets bypass normal authentication logs; the practical detection is
+anomalous TGT lifetimes and encryption types. Rotating the krbtgt password twice
+invalidates outstanding tickets.
+""",
+    ),
+    BenchmarkDoc(
+        source_id=REF_SOURCE,
+        external_id="ref/sql-injection-prevention.md",
+        title="Preventing SQL Injection",
+        categories=["web", "defence"],
+        body="""# Preventing SQL Injection
+
+Injection flaws are prevented at the point where a query is built, not by
+filtering input.
+
+## Parameterised queries
+
+Bind every value as a parameter so the database parses the statement once and
+treats the value as data rather than SQL. This is the only reliably complete
+defence for SQL injection and it costs nothing at runtime.
+
+## When parameters are not possible
+
+Identifiers such as table names cannot be bound as parameters; map user input
+to a known allow-list of identifiers instead. Escaping and blacklisting are
+weaker and routinely bypassed by encoding tricks.
+""",
+    ),
 ]
 
 
@@ -345,6 +422,67 @@ User-Agent header and include it to gain remote code execution as www-data.
 ## Escalation
 
 A world-writable cron script running as root is my path to a root shell.
+""",
+    ),
+    # -- cross-source near-duplicates --------------------------------------
+    # Same subject matter as a reference page, told as a case. These are what
+    # make the mode bonus observable: for a query whose terms match both about
+    # equally, ``case_similarity`` must rank the writeup first while
+    # ``technique`` ranks the reference page.
+    #
+    # "About equally" is load-bearing, and the measurements say exactly how
+    # equal. With ``reranker._MODE_BONUS = 0.3`` the mode multiplier is 1.3, so
+    # a writeup overtakes the reference page only when its base score is at
+    # least ~1/1.3 = 0.77 of the reference's. Measured from this corpus:
+    # blackfield/asrep 0.93 (flips), hawat/ssrf 1.22 (flips), forest/asrep 0.88
+    # (flips). A query that matches a reference page's *title* pushes the ratio
+    # far below that (a bare "kerberoasting" gives 0.00 for wu/htb-sizzle, whose
+    # body says "kerberoast" — the index does not stem), and then no mode bonus
+    # can flip it. The gold set therefore tests the bonus with the descriptive
+    # queries below, not with bare terms.
+    BenchmarkDoc(
+        source_id=WRITEUP_SOURCE,
+        external_id="wu/htb-blackfield.md",
+        title="HTB: Blackfield",
+        categories=["htb", "windows", "writeup"],
+        body="""# HTB: Blackfield
+
+Blackfield is a hard Windows Active Directory box.
+
+## Foothold
+
+An anonymous SMB share contains a backup archive of the domain controller,
+which leaks a password hash. Cracking it gives a domain user. Enumeration then
+shows an account with Kerberos pre-authentication disabled, so I AS-REP roast
+it and crack the ticket offline.
+
+## Escalation
+
+The foothold account holds backup operator rights. Using those I dump the
+domain's account secrets and recover the administrator hash, then log in over
+WinRM.
+""",
+    ),
+    BenchmarkDoc(
+        source_id=WRITEUP_SOURCE,
+        external_id="wu/pg-hawat.md",
+        title="PG: Hawat (SSRF to internal service)",
+        categories=["pg", "linux", "web", "writeup"],
+        body="""# PG: Hawat (SSRF to internal service)
+
+Hawat is a Linux Proving Grounds box whose web application fetches URLs on the
+user's behalf.
+
+## Foothold
+
+The fetch feature is a server-side request forgery. I point it at the internal
+port range and find a service bound to loopback that is not exposed publicly.
+Its admin interface accepts a request created through the SSRF, which gets me
+command execution.
+
+## Escalation
+
+A misconfigured systemd unit running as root is the path to a root shell.
 """,
     ),
 ]

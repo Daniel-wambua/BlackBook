@@ -89,6 +89,12 @@ class IngestionPipeline:
                 log.info(
                     "[%s] embedded %d new chunks", adapter.source_id, result.embedded
                 )
+
+        # Freshness is recorded last, so it means "last successfully pulled"
+        # rather than "last attempted": a fetch that raises never reaches this
+        # line and the source keeps its previous stamp, which is the honest
+        # reading of a run that did not complete.
+        self.db.mark_source_fetched(adapter.source_id, adapter.version())
         return result
 
     # -- internals ---------------------------------------------------------

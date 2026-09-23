@@ -2,16 +2,16 @@
 
 <img src="assets/blackbook-mcp-final-refined.png" alt="BlackBook MCP Logo" width="220" style="margin-bottom: 20px;"/>
 
-# BlackBook MCP v0.8.0
+# BlackBook MCP v0.9.0
 ### Source-Grounded Cybersecurity and bugbounty Knowledge & Research MCP
 
-[![Version](https://img.shields.io/badge/version-0.8.0-22d3ee?style=flat-square)](#)
+[![Version](https://img.shields.io/badge/version-0.9.0-22d3ee?style=flat-square)](#)
 [![Python](https://img.shields.io/badge/python-3.10%2B-3776AB?style=flat-square&logo=python&logoColor=white)](https://www.python.org/)
 [![Protocol](https://img.shields.io/badge/protocol-MCP-6b6bec?style=flat-square)](https://modelcontextprotocol.io/)
-[![MCP Tools](https://img.shields.io/badge/MCP%20tools-11-2ea043?style=flat-square)](#available-mcp-tools)
+[![MCP Tools](https://img.shields.io/badge/MCP%20tools-12-2ea043?style=flat-square)](#available-mcp-tools)
 [![Retrieval](https://img.shields.io/badge/retrieval-FTS5%20%2B%20Semantic-22b8f0?style=flat-square)](#retrieval-architecture)
-[![Sources](https://img.shields.io/badge/sources-21%20default%20sources-8957e5?style=flat-square)](#what-it-is)
-[![Tests](https://img.shields.io/badge/tests-257%20passing-3fb950?style=flat-square)](#testing)
+[![Sources](https://img.shields.io/badge/sources-26%20default%20sources-8957e5?style=flat-square)](#what-it-is)
+[![Tests](https://img.shields.io/badge/tests-404%20passing-3fb950?style=flat-square)](#testing)
 [![Status](https://img.shields.io/badge/status-alpha-f59e0b?style=flat-square)](#roadmap)
 [![License](https://img.shields.io/badge/license-MIT-8f5be8?style=flat-square)](LICENSE)
 [![Read only](https://img.shields.io/badge/read%20only-no%20execution-eab308?style=flat-square)](#security-model)
@@ -65,7 +65,7 @@ Claude is the orchestrator.
 
 ## Architecture Overview
 
-BlackBook MCP v0.8.0 is a source-grounded knowledge system: every query flows through
+BlackBook MCP v0.9.0 is a source-grounded knowledge system: every query flows through
 a hybrid retrieval facade, is enriched (never gated) by a knowledge graph, and returns
 results that resolve to exact, verifiable citations. Nothing is executed.
 
@@ -82,10 +82,10 @@ results that resolve to exact, verifiable citations. Nothing is executed.
   "nodeTextColor": "#fee2e2"
 }}}%%
 graph TD
-    A[AI Agent - Claude / Cursor / VS Code] -->|MCP Protocol over stdio| B[BlackBook MCP Server v0.8.0]
+    A[AI Agent - Claude / Cursor / VS Code] -->|MCP Protocol over stdio| B[BlackBook MCP Server v0.9.0]
 
     B --> C[Hybrid Retrieval Facade]
-    B --> D[11 Knowledge Tools]
+    B --> D[12 Knowledge Tools]
     B --> E[Knowledge Graph]
 
     C --> F[FTS5 BM25 - always on]
@@ -97,6 +97,7 @@ graph TD
     D --> K[knowledge_technique]
     D --> L[knowledge_case_search]
     D --> M[knowledge_research]
+    D --> M2[knowledge_graph]
     D --> N[knowledge_context]
 
     E --> O[Technique / Tool / Service / OS]
@@ -235,7 +236,11 @@ embeddings:
   device: cpu
 retrieval:
   default_limit: 8
-  per_document_cap: 2              # source diversity
+  per_document_cap: 2              # source diversity: max chunks per document
+  per_source_cap: 4                # source diversity: max results per source
+query_log:
+  enabled: true                    # record every search locally (see Query log)
+  max_entries: 5000                # newest entries kept; older ones pruned
 ```
 
 Twenty-six sources are configured and enabled by default (run `blackbook sources`
@@ -248,6 +253,21 @@ GitHub-backed sources accept a few extra keys: `ref` (branch), `include_glob`
 published site instead of the GitHub blob URL; a Jekyll `permalink` in a
 page's front matter wins over the path-derived URL). See
 `config.example.yaml`.
+
+### Source freshness
+
+Every ingest run stamps the source it pulled: when it was last fetched
+successfully, and at which revision. `blackbook sources` shows both, and the
+`knowledge_sources` tool returns them as `last_fetched` and `version`.
+
+The timestamp means *last successful pull*, not *last attempt*: a fetch that
+fails leaves the previous stamp in place, because a run that did not complete
+should not look like one that did. The revision is the commit the extracted
+tree actually came from, read back from the fetch marker rather than
+remembered in memory, so a run that skipped the download still reports what it
+is working from. Sources with no revision to speak of (a website crawl, a
+local directory) report a timestamp and no version, and a source that has
+never been fetched reports neither rather than a misleading zero.
 
 ## Initial ingestion
 
@@ -316,9 +336,11 @@ blackbook search "windows service privilege escalation" --source hacktricks
 blackbook search "NTLM relay" --platform windows --limit 5
 blackbook search "crack service account passwords" --mode semantic  # paraphrase-friendly
 blackbook stats [--json]        # corpus counts (machine-readable with --json)
-blackbook sources [--json]
-blackbook graph build     # (re)build the knowledge graph from the index
-blackbook graph show [--json]   # graph entity/relationship counts
+blackbook sources [--json]      # configured sources, index counts, freshness
+blackbook queries [--empty] [--clear]   # what was asked, and what came back empty
+blackbook graph build [--full]   # (re)build the knowledge graph, reusing cached terms
+blackbook graph show [--json]   # graph counts + writeup coverage by source
+blackbook graph neighbors kerberoasting -d 2   # walk the graph from an entity
 blackbook doctor          # diagnostics: db, index, sources, embeddings
 blackbook rebuild-index   # rebuild the FTS5 index
 blackbook case export MY-CASE   # export an investigation case as Markdown
@@ -337,6 +359,39 @@ canonical technique/reference material up) and `case_similarity` (favours hands-
 writeups). The intent modes *nudge* ranking, they never filter results out. Semantic
 and hybrid use vectors only when `embeddings.enabled` and the `[semantic]` extra is
 installed; otherwise they fall back to lexical automatically.
+
+### Query log
+
+Every search is recorded locally: the phrasing, the mode, which sources were
+searched, how many results came back, the best score, and the latency.
+
+```bash
+blackbook queries              # recent entries, newest first
+blackbook queries --empty      # only the ones that returned nothing
+blackbook queries --json       # stats + entries, machine-readable
+blackbook queries --clear      # delete the log
+```
+
+The useful rows are the empty ones. A query that returns nothing is the only
+evidence the index gives about what it *cannot* answer, and that evidence is
+invisible from the corpus side: no amount of reading the indexed documents
+tells you which phrasing a user tried and missed. `--empty` is that view.
+
+The log is local to the SQLite file and never transmitted anywhere. It is
+bounded (the newest `query_log.max_entries` entries, default 5000, pruned on
+insert) so it stays recent history rather than an ever-growing table, and it
+can be turned off completely:
+
+```yaml
+query_log:
+  enabled: true       # set false to record nothing at all
+  max_entries: 5000
+```
+
+A log write never affects the search it describes: failures are swallowed and
+reported at debug level, so a locked database or a full disk degrades the log
+and never the answer. `blackbook eval` does not write to the log at all, since
+it measures retrieval rather than reporting usage.
 
 ### Semantic embeddings
 
@@ -362,11 +417,11 @@ you almost always want.
 | **stdio** (default) | `blackbook serve` | the MCP client spawns it automatically | Claude Code / Cursor / VS Code |
 | **streamable-http** | `blackbook serve --http` | you start it, it stays running | a shared always-on server, remote access, or just to see the banner |
 
-* **stdio** — the client (Claude Code, Cursor, VS Code) owns the process: it
+* **stdio**: the client (Claude Code, Cursor, VS Code) owns the process. It
   spawns `blackbook serve` on session start, talks over stdin/stdout, and stops
   it on exit. Nothing to launch by hand. This is the mode all the setup snippets
   below use.
-* **streamable-http** — a long-lived network server you run yourself, reachable
+* **streamable-http**: a long-lived network server you run yourself, reachable
   at `http://<host>:<port>/mcp` with a `GET /health` check. Handy for a shared
   instance or when you want the banner in front of you. It is **not** something a
   client auto-launches, so don't register an HTTP endpoint that isn't already
@@ -390,6 +445,23 @@ override them for a single run.
 > `BLACKBOOK_SERVER__AUTH_TOKEN`) and clients must then send
 > `Authorization: Bearer <token>`. Only flip `require_auth_off_loopback: false`
 > if you understand the exposure.
+
+### Health endpoint
+
+`GET /health` is for monitoring, and it reports the whole surface rather than
+just liveness: version, transport, corpus counts, and the names of every tool,
+resource and prompt the server exposes. Opening the base URL instead gives a
+landing page with the same information.
+
+Because a monitor may poll `/health` on a timer, the corpus counts there (and
+on the landing page) come from a short-lived cache rather than a fresh count.
+Counting the chunk table is the one query that scales with the whole corpus,
+around 4 ms at half a million chunks, which is pointless to repeat per poll for
+a number nothing acts on. Any write **this** process commits clears the cache
+outright, so a server that has just ingested reports the new totals on its next
+request; a write from another process (a CLI ingest while the server is up) is
+picked up within five seconds. Everything an answer depends on, including the
+`blackbook://corpus` resource and the CLI, reads the exact counts.
 
 ## Claude Code setup
 
@@ -442,7 +514,7 @@ the banner and logs never corrupt an MCP client's stream.
 ██████╔╝███████╗██║  ██║╚██████╗██║  ██╗██████╔╝╚██████╔╝╚██████╔╝██║  ██╗
 ╚═════╝ ╚══════╝╚═╝  ╚═╝ ╚═════╝╚═╝  ╚═╝╚═════╝  ╚═════╝  ╚═════╝ ╚═╝  ╚═╝
   Source-grounded cybersecurity knowledge & research MCP
-  v0.8.0  ·  stdio  ·  read-only · no execution · every claim cited
+  v0.9.0  ·  stdio  ·  read-only · no execution · every claim cited
   corpus  <live database count> sources · <live count> docs · <live count> chunks · <live count> embeddings
   graph   <live count> entities · <live count> relationships · <live count> cases
 ```
@@ -475,16 +547,52 @@ files stay clean.
 | `knowledge_search` | ✅ | Source-grounded search with provenance-tagged results |
 | `knowledge_source` | ✅ | Resolve a reference to the exact supporting excerpt |
 | `knowledge_technique` | ✅ | Structured technique dossier (graph-enriched, always cited; official ATT&CK tactics/platforms/link when mapped) |
+| `knowledge_graph` | ✅ | Bounded graph walk outward from any entity, evidence-linked edges |
 | `knowledge_case_search` | ✅ | Similar-case (writeup) retrieval, techniques annotated |
 | `knowledge_research` | ✅ | Observation-driven, source-grounded research packets |
 | `knowledge_context` | ✅ | Local investigation state (cases + observations) |
 | `knowledge_hunt_plan` | ✅ | Cited, non-executing bug bounty validation plans |
 | `knowledge_finding_review` | ✅ | Evidence-gap and severity-guidance review |
 | `knowledge_report_draft` | ✅ | Cautious report drafts from local case evidence |
-| `knowledge_sources` | ✅ | Configured sources and actual index counts |
+| `knowledge_sources` | ✅ | Configured sources, index counts, and freshness (last fetch, revision) |
 | `knowledge_compare` | ✅ | Independent multi-source evidence comparison |
 
 Only implemented tools are registered; nothing is stubbed or faked.
+
+### MCP resources
+
+Resources are read-only views of local state. A tool answers a question; a
+resource is there for an agent to see what the corpus holds without spending a
+tool call on it. Each one is computed on read, so it can never describe a
+database other than the one it was just read from, and none of them write or
+reach the network.
+
+| Resource | Returns |
+|----------|---------|
+| `blackbook://sources` | Configured sources with index counts and freshness. The same payload as `knowledge_sources` |
+| `blackbook://corpus` | Counts: sources, documents, chunks, embeddings, graph entities and relationships, cases, query-log totals |
+| `blackbook://vocabulary` | The controlled vocabulary: service, technique and tool terms, the ATT&CK id each technique maps to, and the aliases the filters resolve |
+| `blackbook://cases` | Local investigation cases: name, target, platform, observation count |
+| `blackbook://case/{name}` | One case rendered as portable Markdown. A missing case returns a short note naming `blackbook://cases`, not an error |
+
+`blackbook://vocabulary` is the one worth reading first if you are driving the
+server yourself. It lists the exact spellings the `techniques` filter resolves
+against, so you can ask for `kerberoasting` rather than guess at a phrasing the
+index will not match.
+
+### MCP prompts
+
+Prompts are framings for the questions this corpus can answer. The failure mode
+with a knowledge server is not "no answer", it is a fluent answer the corpus
+never supported, so every one of these routes the agent through the tools and
+asks it to cite what comes back and name the gap where nothing did.
+
+| Prompt | Arguments | Use |
+|--------|-----------|-----|
+| `triage_observation` | `observation`, `target` (optional) | Turn a raw observation into a source-grounded triage starting point |
+| `explain_technique` | `technique`, `platform` (optional) | Explain a technique strictly from what the indexed sources document |
+| `review_finding` | `finding` | Review a suspected finding for evidence gaps before it is reported |
+| `draft_report` | `case` | Draft a cautious report from a local case, keeping the warnings where evidence is missing |
 
 ### Example Claude Code interaction
 
@@ -514,17 +622,63 @@ The graph **enhances** retrieval, it never gates it: search and both new tools w
 with an empty graph and simply gain neighbours/annotations once it is built.
 
 ```bash
-blackbook graph build     # (re)build the graph from the index, full and idempotent
+blackbook graph build     # (re)build the graph from the index, idempotent
+blackbook graph build --full   # re-extract every document, ignoring the term cache
 blackbook graph show      # current entity/relationship counts, no rebuild
+blackbook graph neighbors kerberoasting --depth 2 --direction out
 ```
 
+`blackbook graph show` also reports **writeup coverage**: how many documents count as
+hands-on writeups and which sources contribute none. The graph's own writeup total is a
+single number, so a corpus where every writeup comes from one source while the largest
+source contributes none looks fully populated; the coverage table names the gaps
+instead. `blackbook doctor` reports the same figures as a single check.
+
+Edges come in two kinds, and they are stored differently on purpose. A **documentary**
+edge (`documented_by`, `demonstrated_in`, `used_in`, `present_in`, `runs_on`) is a fact
+about one document, so it is stored once per document with `support = 1` and that
+document as its citation. A **co-occurrence** edge (`uses`, `targets`) is one claim that
+many documents can witness: two terms appearing in the same page says the same thing
+however many pages say it. Those collapse to a single row per pair, with `support`
+counting how many distinct documents backed the claim and the lowest such document kept
+as the citation. Without that, a real corpus stores ~43 rows per pair and
+`knowledge_technique` repeats the same tool or service hundreds of times; with it, each
+neighbour is listed once and `support` is what separates a claim made everywhere from
+one made once.
+
 Ingesting also refreshes the graph automatically (skip with `ingest --no-graph`).
-Two tools consume it:
+
+**A rebuild is incremental.** Term extraction is a regex pass over every document's
+full text and accounts for essentially all of a build's cost, so the vocabulary terms
+each document contributed are cached, keyed by a fingerprint of everything the
+extraction reads (content hash, title, source, categories, metadata). A rebuild
+re-extracts only the documents whose fingerprint moved, then assembles the graph from
+all documents' terms as before, which is what makes the result identical to a
+from-scratch build: only the input to assembly is cached, never its output. When
+nothing changed at all, the rebuild is skipped outright and the command says so. On a
+25k-document corpus this takes a rebuild from about two minutes to under a second when
+nothing moved, and to a couple of seconds after a small ingest. Use `--full` to
+distrust the cache and re-extract everything. The fingerprint carries a cache version
+constant that is bumped whenever the extraction itself changes (a new vocabulary list,
+a changed alias table, a different scan cap), so a cache written by an older version
+cannot keep serving terms the current code would no longer produce.
+
+Three tools consume the graph:
 
 * `knowledge_technique`: returns which sources document a technique, which
-  tools/services/writeups the graph associates with it (each edge with confidence
-  and its backing document), plus real cited excerpts. Works before the graph
+  tools/services/writeups the graph associates with it (each edge with confidence,
+  support, and its backing document), plus real cited excerpts. Works before the graph
   exists; it always returns indexed references.
+* `knowledge_graph`: walks the graph outward from any entity (technique, tool,
+  service, os, writeup or source), up to 3 hops, following any predicate in either
+  direction, and returns the reached entities plus the edges between them. Where
+  `knowledge_technique` answers a fixed question about one technique, this answers
+  the open one: what is around this entity at all. Resolution is exact-match, so a
+  near miss returns candidate names rather than traversing the wrong entity and
+  producing a plausible, entirely wrong neighbourhood. Both bounds on the walk (a
+  per-node `limit` and an overall `max_nodes`) are reported through `truncated` and
+  `note` instead of being applied silently, so a partial result is never mistaken
+  for a complete one. Available from the terminal as `blackbook graph neighbors`.
 * `knowledge_case_search`: finds hands-on writeups similar to a situation and,
   when the graph is built, annotates each with the techniques it demonstrates.
 
@@ -534,6 +688,32 @@ See `docs/retrieval.md`. FTS5 BM25 is always available; semantic search is an
 optional local backend merged into the same facade. Reranking combines lexical
 score, source authority, platform/category match, and keyword overlap, then a
 per-document cap enforces source diversity.
+
+## Source diversity
+
+Two caps shape a result set, and they differ in kind.
+
+The **per-document cap** (`retrieval.per_document_cap`, default 2) is hard.
+Past it a chunk is discarded, because several chunks of one page are near
+certainly the same evidence restated.
+
+The **per-source cap** (`retrieval.per_source_cap`, default 4) is a
+preference. HackTricks alone is over a thousand documents here, so a query it
+covers heavily can otherwise return eight HackTricks chunks and nothing else
+while the writeup repos, the cheatsheets and the local pdfs hold comparable
+evidence. Past the cap a hit is set aside rather than dropped, and any slot the
+diverse hits did not fill is spent on exactly those set-aside hits.
+
+The consequence worth stating plainly is that **the cap never shortens a
+result list**. Ask for eight and you get eight; on a corpus where one source
+holds everything relevant the output is identical, and the cap only reorders
+when there was genuinely another source to prefer. Set it to `0` to disable.
+
+On the current corpus this changes four of the twenty four answerable gold
+queries, and changes none of their metrics: `hit_rate`, `mrr`,
+`mean_recall_at_k` and `citation_integrity` are identical with the cap on and
+off, so nothing relevant was displaced. What it does change is the spread. One
+query that returned six chunks from a single source now returns four sources.
 
 ## Source provenance
 
@@ -610,6 +790,13 @@ generated PDF and skip if `reportlab` isn't installed.
 - [x] **Phase 7**: generic GitHub source adapter (tarball over HTTPS, config-driven)
   with PayloadsAllTheThings, The Hacker Recipes, GTFOBins, LOLBAS, LOOBins,
   WADComs; MITRE ATT&CK STIX source with technique-dossier enrichment
+- [x] **Phase 8**: MCP prompts and resources (corpus, sources, vocabulary, cases as
+  readable views); an ATT&CK ID lookup derived from the indexed corpus rather than a
+  hand-kept table; a bounded local query log (`blackbook queries`) covering what was
+  asked, what came back empty, and when a semantic request fell back to lexical;
+  per-source freshness reporting; a per-document source-diversity cap in retrieval;
+  search diagnostics in `blackbook doctor`; and an incremental knowledge-graph rebuild
+  that caches per-document term extraction
 
 ## License
 

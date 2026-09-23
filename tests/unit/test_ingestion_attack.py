@@ -93,13 +93,23 @@ def test_knowledge_technique_enriched_from_attack_source(attack_db):
     assert out.tactics == ["credential-access"]
     assert out.platforms == ["IaaS", "Windows"]
     assert out.mitre_url == "https://attack.mitre.org/techniques/T1558/003/"
-    # The ATT&CK record is cited first, resolvable to a real indexed chunk
+    # Every ATT&CK citation must resolve to a real indexed chunk, and it must
+    # be the genuine ATT&CK record for this technique.
+    #
+    # This deliberately does not assert that the *first* reference's text
+    # mentions "Kerberos". The fixture corpus holds a single document, so every
+    # chunk of it shares one IDF-0 term set and their bm25 scores differ only
+    # at ~1e-6. Which chunk sorts first among those near-ties is noise (it moved
+    # when the column weights landed), so pinning it made this test assert
+    # nothing about grounding. Asserting the resolved excerpt's record instead
+    # is the property that actually matters and is stable under reweighting.
     attack_refs = [r for r in out.references if r.ref.source == "attack"]
     assert attack_refs, "expected an ATT&CK reference in the dossier"
-    first = attack_refs[0]
-    excerpt = get_chunk_excerpt(attack_db, first.ref.chunk_id)
-    assert excerpt is not None
-    assert "Kerberos" in excerpt.text
+    for ref in attack_refs:
+        excerpt = get_chunk_excerpt(attack_db, ref.ref.chunk_id)
+        assert excerpt is not None, "every ATT&CK citation must resolve to a chunk"
+        assert excerpt.source_id == "attack"
+        assert "Kerberoasting" in excerpt.title
 
 
 def test_knowledge_technique_without_attack_source_stays_clean(attack_db):

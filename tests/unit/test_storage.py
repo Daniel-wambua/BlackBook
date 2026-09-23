@@ -1,3 +1,5 @@
+import pytest
+
 from blackbook.storage import Source, Document, Chunk
 from blackbook.storage.database import sha256_text
 
@@ -57,3 +59,67 @@ def test_counts(seeded_db):
     assert counts["sources"] == 2
     assert counts["documents"] == 2
     assert counts["chunks"] == 3
+
+
+# -- counts_cached ---------------------------------------------------------
+#
+# Counting the chunk table costs a few milliseconds against a real corpus, and
+# the poll-shaped readouts (/health, the landing page) ask for it on a timer.
+# These pin the two properties that keep the cache honest: it is actually
+# serving a cached reading, and a write this process commits clears it.
+
+
+def _add_source_out_of_band(db, source_id="late"):
+    """Insert a source without going through ``session()``.
+
+    This is what a write made by another process looks like from here: it
+    reaches the tables but never touches the invalidation hook. Used to prove
+    the cache is being served rather than silently recomputed.
+    """
+    with db.conn:
+        db.upsert_source(Source(source_id=source_id, name=source_id))
+
+
+def test_counts_cached_agrees_with_counts(seeded_db):
+    assert seeded_db.counts_cached() == seeded_db.counts()
+
+
+def test_counts_cached_serves_the_cached_reading(seeded_db):
+    first = seeded_db.counts_cached()
+    _add_source_out_of_band(seeded_db)
+    # The exact read sees the new row; the cached read is still inside its TTL.
+    assert seeded_db.counts()["sources"] == 3
+    assert seeded_db.counts_cached() == first
+
+
+def test_a_committed_write_invalidates_the_cache(seeded_db):
+    seeded_db.counts_cached()
+    with seeded_db.session():
+        seeded_db.upsert_source(Source(source_id="late", name="Late"))
+    assert seeded_db.counts_cached()["sources"] == 3
+
+
+def test_a_rolled_back_session_leaves_the_cache_alone(seeded_db):
+    seeded_db.counts_cached()
+    with pytest.raises(RuntimeError):
+        with seeded_db.session():
+            seeded_db.upsert_source(Source(source_id="ghost", name="Ghost"))
+            raise RuntimeError("boom")
+    assert seeded_db.get_source("ghost") is None
+    # A rollback changed nothing, so the cache was left in place. Had the
+    # rollback cleared it, this read would have recomputed and picked up the
+    # out-of-band row below.
+    _add_source_out_of_band(seeded_db)
+    assert seeded_db.counts_cached()["sources"] == 2
+
+
+def test_max_age_zero_always_recomputes(seeded_db):
+    seeded_db.counts_cached()
+    _add_source_out_of_band(seeded_db)
+    assert seeded_db.counts_cached(max_age=0.0)["sources"] == 3
+
+
+def test_the_cached_reading_is_handed_out_as_a_copy(seeded_db):
+    got = seeded_db.counts_cached()
+    got["chunks"] = -1
+    assert seeded_db.counts_cached()["chunks"] == 3

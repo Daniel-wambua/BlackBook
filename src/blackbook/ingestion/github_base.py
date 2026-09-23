@@ -63,6 +63,21 @@ class GithubTarballAdapter(SourceAdapter):
     def _ref(self) -> str:
         return self.config.ref or "master"
 
+    def version(self) -> str | None:
+        """The commit currently on disk, read back from the fetch marker.
+
+        ``fetch`` writes the marker, so this reports what the extracted tree
+        actually came from on both paths: a fresh download and the
+        already-at-latest-commit skip. Reading it back rather than remembering
+        it in memory keeps that true for a process that never fetched at all
+        (a re-run against an existing raw dir), which is exactly the case where
+        a remembered value would be wrong.
+        """
+        try:
+            return (self._workdir() / ".commit").read_text().strip() or None
+        except OSError:
+            return None
+
     # -- fetching ----------------------------------------------------------
 
     def _workdir(self) -> Path:

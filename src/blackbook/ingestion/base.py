@@ -98,3 +98,14 @@ class SourceAdapter(ABC):
 
     def stats(self) -> IngestStats:
         return IngestStats()
+
+    def version(self) -> str | None:
+        """A revision marker for the fetched material, or ``None``.
+
+        For a repository-backed source this is the commit that was fetched,
+        which is what makes "is this corpus current?" answerable: the recorded
+        timestamp says when we last looked, this says what we looked at. A
+        source with no revision to speak of (a website crawl, a local
+        directory) returns ``None``, and the timestamp stands alone.
+        """
+        return None
