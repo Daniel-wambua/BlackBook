@@ -32,13 +32,16 @@ Registered adapters:
 | `website` sources | `WebsiteAdapter` | website | Bounded same-origin HTML crawling for configured documentation and disclosure pages; optional `path_prefix` prevents unrelated-site crawling |
 | `rss` sources | `RssAdapter` | rss | Conditional RSS/Atom feed ingestion with cached validators |
 | `webhacklist` | `GithubMarkdownAdapter` | git | Full WebHackList Markdown archive with exact cross-document deduplication |
+| `martian1337_notes`, `pentest_book` | `GitbookAdapter` | gitbook | Published GitBook spaces, read via `llms.txt` + per-page markdown |
+| `nt_functions` | `FunctionIndexAdapter` | function_index | One HTML index of ~24k decompiled NT kernel functions, one page per function; `include_prefixes` selects ~7.6k |
 
 Add a future source by subclassing `SourceAdapter` (or, for a GitHub repo,
 `GithubTarballAdapter`) and registering it in
 `blackbook/ingestion/__init__.py:ADAPTER_REGISTRY`. Unregistered `git`-type
 sources fall back to the generic GitHub-markdown adapter, `website` sources to
-the bounded website adapter, `rss` sources to the feed adapter, and
-`filesystem` sources to the PDF adapter.
+the bounded website adapter, `rss` sources to the feed adapter, `gitbook`
+sources to the GitBook adapter, `function_index` sources to the function-index
+adapter, and `filesystem` sources to the PDF adapter.
 
 Generic website sources follow links from the configured URL, stay on the same
 origin, optionally stay below `path_prefix`, skip non-HTML assets, cache pages
@@ -140,6 +143,85 @@ with an empty body.
 * Services / techniques / tools are extracted by a lightweight heuristic and are
   explicitly marked `metadata_inferred: true`. Fields that can't be confidently
   extracted are left `None` (nullable metadata) rather than guessed.
+
+## GitBook spaces
+
+GitBook renders page bodies client-side, so crawling the published HTML yields
+only sidebar and table-of-contents chrome. `type: gitbook` reads the two
+machine-readable companions GitBook publishes instead:
+
+* `<base_url>/llms.txt` — the space's full page index, one
+  `- [Title](<url>.md)` line per page. Those URLs are the **published slugs**
+  and routinely differ from any backing repository's file paths, which is why
+  the index (not the repo) is the authority for both the page list and each
+  page's citation link.
+* `<base_url>/<page>.md` — the page body as clean markdown, headings and fenced
+  code intact.
+
+Only same-origin links below `base_url` are kept, so a space that links out to
+other books does not silently widen the corpus. Pages and the parsed index are
+cached under the source's raw directory; `fetch(force=False)` is a no-op once
+the index is present. `max_files` caps the page count (default 2000), and the
+cap is logged rather than applied silently.
+
+Before indexing, three kinds of publisher chrome are stripped — the leading
+"documentation index" blockquote, the trailing `# Agent Instructions` section,
+and the `{% hint %}` / `{% tabs %}` / `{% embed %}` template markers (the tag
+goes, the text inside it stays). Site-relative links are made absolute so
+citations resolve. Pages the index still lists after they were moved or deleted
+are served as HTTP 200 with a "Page Not Found" body; those are skipped rather
+than indexed as bogus documents.
+
+Because the published slugs are the citation URLs, point a GitBook source at the
+live book (`https://www.pentest-book.com`) rather than the source repository —
+mapping repo paths onto the site produces dead links.
+
+## Function indexes
+
+Some reference dumps publish one big HTML index that enumerates every item by
+name, each entry linking to a small page of generated body text. The Windows NT
+kernel function browser (`likeagod.revers.engineering/nt/`) is the motivating
+case: a single 2 MB index lists 24,260 decompiled functions, and each links to a
+page holding that function's Hex-Rays pseudocode plus the functions that call it.
+`type: function_index` reads such a site:
+
+1. Fetch and cache the index (`index.html`).
+2. Parse its entries, keep only names matching `include_prefixes`, *then* apply
+   `max_files`.
+3. Fetch each selected page into `pages/<sha256(url)>.html`, skipping pages
+   already cached so an interrupted run resumes instead of restarting.
+
+**Filtering before capping is the point.** Such a site has no sitemap, feed or
+`robots.txt`, so the index is the only discovery path — and a generic `website`
+crawl bounded by `max_files` captures an *alphabetical slice* of the index and
+stops, silently. With `include_prefixes` the cap bounds a known-selected set
+rather than truncating index order. `include_prefixes` is a plain `startswith`
+test, not an exact-name list, so `Mm` selects `MmMapIoSpace` and
+`MmMapIoSpaceEx` alike; an empty list keeps every entry.
+
+Each page becomes a document titled by its function name, whose body is the
+pseudocode in a fenced `c` block followed by a `## Referenced by` list of
+callers. Two deliberate omissions: no `# FunctionName` heading (the chunker
+copies the document title into every chunk's breadcrumb, and the name is already
+in the signature line), and no section at all when a page reports no callers
+(the site's "No references." line is identical across thousands of leaf
+functions, so it could never rank usefully). A lowercased subsystem facet is
+derived from the name's module prefix (`MmMapIoSpace` → `mm`).
+
+The pseudocode is fenced on purpose: the chunker never splits a fenced block, so
+a function stays one intact code chunk instead of being cut mid-statement. The
+cost is that the largest functions become a single oversized chunk — the site's
+own pages top out around 8 KB, and a function with a very large caller list
+(`ZwClose` lists 728) spreads that list across several word-count-sized text
+chunks.
+
+Two parsing details worth keeping in mind if you adapt this adapter. Tags are
+stripped from the pseudocode using an **allowlist of tag names**, never a bare
+`<[^>]+>`: decompiled C is full of literal `<` comparisons, and a permissive
+pattern swallows everything from `if( a < b )` through the next real tag,
+silently deleting code. And a `<br>` inside the block becomes a newline rather
+than being dropped, so two statements on either side of one are not spliced into
+a single corrupted identifier.
 
 ## Local PDFs
 

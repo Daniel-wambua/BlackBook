@@ -38,8 +38,13 @@ class SourceConfig(BaseModel):
     id: str
     name: str
     enabled: bool = True
-    # "git" (clone + parse), "website" (crawl/scrape), "filesystem" (local files)
-    type: Literal["git", "website", "filesystem", "rss"] = "filesystem"
+    # "git" (clone + parse), "website" (crawl/scrape), "filesystem" (local
+    # files), "rss" (one configured feed), "gitbook" (a GitBook space, read via
+    # its llms.txt index and per-page markdown), "function_index" (one HTML
+    # page listing every item by name, plus a small page per item).
+    type: Literal[
+        "git", "website", "filesystem", "rss", "gitbook", "function_index"
+    ] = "filesystem"
     # Source authority affects ranking weight and how results are presented.
     authority: Literal["official", "trusted", "user", "unknown"] = "unknown"
     # Optional category tags propagated to every chunk from this source.
@@ -71,6 +76,11 @@ class SourceConfig(BaseModel):
     # When true, exact normalized chunk duplicates already present in the
     # corpus are skipped while preserving the first source's provenance.
     deduplicate_chunks: bool = False
+
+    # function-index sources: keep only index entries whose name starts with one
+    # of these prefixes ("" = keep every entry). Applied before max_files, so
+    # the cap bounds the selected set rather than truncating the index order.
+    include_prefixes: list[str] = Field(default_factory=list)
 
     # Fetch limits (security / cost control)
     max_files: int | None = None
@@ -442,6 +452,115 @@ def _default_sources() -> list[SourceConfig]:
             site_url="https://webhacklist.com",
             deduplicate_chunks=True,
             categories=["web-security", "research", "webhacklist"],
+        ),
+        # Community-authored pentest material published without a declared
+        # license. Same posture as the report archives above: indexed locally
+        # for research use and marked "unknown" authority so it never outranks
+        # curated sources. Promote an entry to "trusted" once its provenance
+        # and redistribution terms have been reviewed.
+        #
+        # highon.coffee is a Hugo blog: only /blog/* is content (the sitemap's
+        # ~930 /services/* pages are marketing noise), and the URL must carry
+        # the prefix itself or the crawl has no valid entry point.
+        SourceConfig(
+            id="highon_coffee",
+            name="High on Coffee",
+            enabled=True,
+            type="website",
+            authority="unknown",
+            url="https://highon.coffee/blog",
+            path_prefix="/blog",
+            max_files=80,
+            categories=["pentest", "blog"],
+        ),
+        # GitBook spaces. Their page bodies are client-rendered, so the generic
+        # website crawl would index only sidebar chrome; the GitBook adapter
+        # reads the space's llms.txt index and each page's markdown instead.
+        SourceConfig(
+            id="martian1337_notes",
+            name="Martian Defense Notebook",
+            enabled=True,
+            type="gitbook",
+            authority="unknown",
+            url="https://martian1337.gitbook.io/notes",
+            categories=["notes", "training"],
+        ),
+        # Read from the published book rather than the six2dez/pentest-book
+        # repo: GitBook's slugs differ from the repo's file paths, so mapping
+        # repo paths onto the site produces dead citation links.
+        SourceConfig(
+            id="pentest_book",
+            name="Pentest Book (six2dez)",
+            enabled=True,
+            type="gitbook",
+            authority="unknown",
+            url="https://www.pentest-book.com",
+            categories=["pentest", "methodology"],
+        ),
+        # Astro blog; the pyjail cheatsheet lives here. Only the blog content
+        # collection is ingested, and site_url maps each post to its page.
+        SourceConfig(
+            id="shirajuki_blog",
+            name="Shirajuki Notes",
+            enabled=True,
+            type="git",
+            authority="unknown",
+            url="https://github.com/Shirajuki/shirajuki.github.io.git",
+            ref="master",
+            content_root="src/content/blog",
+            site_url="https://shirajuki.js.org/blog",
+            categories=["python", "exploitation"],
+        ),
+        # Single-page GitHub Pages guide; its whole text is in index.html.
+        SourceConfig(
+            id="arcanum_devops",
+            name="DevOps Attack Surface (Arcanum Sec)",
+            enabled=True,
+            type="website",
+            authority="unknown",
+            url="https://arcanum-sec.github.io/devops-attack-surface/",
+            path_prefix="/devops-attack-surface",
+            max_files=10,
+            categories=["cloud", "devops", "attack-surface"],
+        ),
+        # Browsable decompilation of Windows kernel binaries: one index page
+        # listing ~24k function names, each linking to a small page of Hex-Rays
+        # pseudocode plus the functions that call it. There is no sitemap, feed
+        # or robots.txt, so the index is the only discovery path -- a generic
+        # website crawl bounded by max_files would capture just an alphabetical
+        # slice of it.
+        #
+        # include_prefixes keeps the kernel API surface met in a debugger (the
+        # Nt/Zw system-call layer and the Rtl/Io/Mm/Ob/Ps/Se/Cm/Ki subsystems)
+        # and drops CRT, compiler and templated-name noise; it selects ~7.6k of
+        # the 24.3k entries. max_files must exceed that selection, since the cap
+        # is a truncation guard, not a selector.
+        #
+        # Decompiled proprietary Microsoft code hosted without a declared
+        # license: indexed locally with unknown authority so it never outranks
+        # curated sources, and the host is a personal server with no uptime
+        # commitment, so citation links can rot.
+        SourceConfig(
+            id="nt_functions",
+            name="Windows NT Kernel Functions (likeagod)",
+            enabled=True,
+            type="function_index",
+            authority="unknown",
+            url="https://likeagod.revers.engineering/nt/",
+            include_prefixes=[
+                "Nt",
+                "Zw",
+                "Rtl",
+                "Io",
+                "Mm",
+                "Ob",
+                "Ps",
+                "Se",
+                "Cm",
+                "Ki",
+            ],
+            max_files=8000,
+            categories=["windows", "kernel", "reverse-engineering", "nt-internals"],
         ),
     ]
 

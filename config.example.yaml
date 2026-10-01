@@ -325,6 +325,89 @@ sources:
     authority: official
     url: https://raw.githubusercontent.com/mitre-attack/attack-stix-data/master/enterprise-attack/enterprise-attack.json
 
+  # Community-authored pentest material published without a declared license.
+  # Same posture as the report archives above: indexed locally for research use
+  # and marked "unknown" authority so it never outranks curated sources.
+  # Promote an entry to "trusted" once its provenance and redistribution terms
+  # have been reviewed.
+
+  # Hugo blog. Only /blog/* is content (the sitemap's ~930 /services/* pages are
+  # marketing noise), and the url must carry the prefix itself or the crawl has
+  # no valid entry point.
+  - id: highon_coffee
+    name: High on Coffee
+    enabled: true
+    type: website
+    authority: unknown
+    url: https://highon.coffee/blog
+    path_prefix: /blog
+    max_files: 80
+    categories: [pentest, blog]
+
+  # GitBook spaces. Their page bodies are client-rendered, so a generic website
+  # crawl would index only sidebar chrome. type: gitbook reads the space's
+  # llms.txt index and each page's markdown instead, which also yields the
+  # published slugs (and so citation links that resolve).
+  - id: martian1337_notes
+    name: Martian Defense Notebook
+    enabled: true
+    type: gitbook
+    authority: unknown
+    url: https://martian1337.gitbook.io/notes
+    categories: [notes, training]
+
+  # Read from the published book rather than the six2dez/pentest-book repo:
+  # GitBook's slugs differ from the repo's file paths, so mapping repo paths
+  # onto the site produces dead citation links.
+  - id: pentest_book
+    name: Pentest Book (six2dez)
+    enabled: true
+    type: gitbook
+    authority: unknown
+    url: https://www.pentest-book.com
+    categories: [pentest, methodology]
+
+  # Astro blog; the pyjail cheatsheet lives here. Only the blog content
+  # collection is ingested, and site_url maps each post to its page.
+  - id: shirajuki_blog
+    name: Shirajuki Notes
+    enabled: true
+    type: git
+    authority: unknown
+    url: https://github.com/Shirajuki/shirajuki.github.io.git
+    ref: master
+    content_root: src/content/blog
+    site_url: https://shirajuki.js.org/blog
+    categories: [python, exploitation]
+
+  # Single-page GitHub Pages guide; its whole text is in index.html.
+  - id: arcanum_devops
+    name: DevOps Attack Surface (Arcanum Sec)
+    enabled: true
+    type: website
+    authority: unknown
+    url: https://arcanum-sec.github.io/devops-attack-surface/
+    path_prefix: /devops-attack-surface
+    max_files: 10
+    categories: [cloud, devops, attack-surface]
+
+  # Name-indexed reference dump: one HTML index listing every item, one small
+  # page per item. This site publishes no sitemap, feed or robots.txt, so the
+  # index is the only discovery path — a generic crawl bounded by max_files
+  # would capture an alphabetical slice and stop, silently. include_prefixes
+  # selects the interesting entries (~7.6k of 24.3k) *before* the cap. The
+  # pages are decompiled Microsoft kernel code with no declared license, hence
+  # authority: unknown; citation links can rot if the server disappears.
+  - id: nt_functions
+    name: Windows NT Kernel Functions (likeagod)
+    enabled: true
+    type: function_index
+    authority: unknown
+    url: https://likeagod.revers.engineering/nt/
+    include_prefixes: [Nt, Zw, Rtl, Io, Mm, Ob, Ps, Se, Cm, Ki]
+    max_files: 8000
+    categories: [windows, kernel, reverse-engineering, nt-internals]
+
 embeddings:
   enabled: false               # Phase 3: semantic/vector search
   model: sentence-transformers/all-MiniLM-L6-v2
